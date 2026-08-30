@@ -1,1 +1,16 @@
+# build artifacts
 build/
+*.exe
+*.test
+
+# local OAuth state (never commit refresh tokens)
+token.json
+*.token
+credentials.json
+
+# local secrets
+.env
+
+# editor / OS cruft
+.DS_Store
+*.swp
