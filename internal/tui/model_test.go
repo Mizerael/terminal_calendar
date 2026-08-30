@@ -106,6 +106,15 @@ func TestLoadEventsPopulatesList(t *testing.T) {
 	}
 }
 
+// parseFormTime accepts both layouts we emit: with an explicit timeZone
+// ("2006-01-02T15:04:05") or with an embedded offset (RFC3339).
+func parseFormTime(v string) (time.Time, error) {
+	if t, err := time.Parse("2006-01-02T15:04:05", v); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, v)
+}
+
 func TestKeyNavMovesCursor(t *testing.T) {
 	f := &fakeAPI{
 		events: []gcal.Event{
@@ -189,19 +198,24 @@ func TestCreateEventFromForm(t *testing.T) {
 	if ev.Summary != "Retro" {
 		t.Errorf("summary = %q", ev.Summary)
 	}
-	start, err := time.Parse(time.RFC3339, ev.Start.DateTime)
+	start, err := parseFormTime(ev.Start.DateTime)
 	if err != nil {
 		t.Fatalf("bad start datetime %q: %v", ev.Start.DateTime, err)
 	}
 	if start.Format("2006-01-02 15:04") != "2026-09-01 10:30" {
 		t.Errorf("unexpected start: %v", start)
 	}
-	end, err := time.Parse(time.RFC3339, ev.End.DateTime)
+	end, err := parseFormTime(ev.End.DateTime)
 	if err != nil {
 		t.Fatalf("bad end datetime %q: %v", ev.End.DateTime, err)
 	}
 	if end.Format("2006-01-02 15:04") != "2026-09-01 11:00" {
 		t.Errorf("unexpected end: %v", end)
+	}
+	if tz := ev.Start.TimeZone; tz != "" {
+		if _, err := time.LoadLocation(tz); err != nil {
+			t.Errorf("start timeZone %q is not a valid IANA zone", tz)
+		}
 	}
 }
 

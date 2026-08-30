@@ -51,13 +51,14 @@ type Model struct {
 	loadErr  error
 	lastSync time.Time
 
-	screen   screen
-	form     *form
-	confirm  *gcal.Event // event awaiting delete confirmation
-	help     bool
-	width    int
-	height   int
-	quitting bool
+	screen     screen
+	form       *form
+	confirm    *gcal.Event // event awaiting delete confirmation
+	confirmErr error
+	help       bool
+	width      int
+	height     int
+	quitting   bool
 }
 
 func New(client eventAPI) (*Model, error) {
@@ -123,8 +124,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgError:
 		m.loading = false
-		if m.screen == screenList {
+		switch m.screen {
+		case screenList:
 			m.loadErr = msg.err
+		case screenForm:
+			m.form.err = "could not save: " + msg.err.Error()
+		case screenConfirm:
+			m.confirmErr = msg.err
 		}
 
 	case msgSaved:
@@ -185,6 +191,7 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.events) > 0 {
 			ev := m.events[m.cursor]
 			m.confirm = &ev
+			m.confirmErr = nil
 			m.screen = screenConfirm
 		}
 	case "r":
@@ -217,6 +224,7 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "n", "esc", "q":
 		m.confirm = nil
+		m.confirmErr = nil
 		m.screen = screenList
 	}
 	return m, nil
@@ -230,6 +238,7 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		m.form.err = ""
 		ev, err := m.form.buildEvent()
 		if err == errValidation {
 			return m, nil
@@ -243,9 +252,9 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.saveEvent(ev, true)
 
-	case "tab", "down", "j":
+	case "tab", "down":
 		m.form.next()
-	case "shift+tab", "up", "k":
+	case "shift+tab", "up":
 		m.form.prev()
 	default:
 		var cmd tea.Cmd
@@ -301,6 +310,9 @@ func (m *Model) renderConfirm() string {
 	}
 	b := titleStyle.SetString("Delete event?").Render() + "\n\n"
 	b += confirmText.Render(fmt.Sprintf("Permanently delete “%s” from your calendar?", title)) + "\n\n"
+	if m.confirmErr != nil {
+		b += formError.Render("✗ could not delete: "+m.confirmErr.Error()) + "\n\n"
+	}
 	b += formHint.Render("y: delete · n: cancel")
 	boxed := formBox.Render(b)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,

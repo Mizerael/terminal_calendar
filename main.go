@@ -22,15 +22,20 @@ func main() {
 		}
 	}
 
-	calendar := flag.String("calendar", os.Getenv("GOOGLE_CALENDAR_ID"), "calendar id to use (default: primary)")
+	calendarID := flag.String("calendar", os.Getenv("GOOGLE_CALENDAR_ID"), "calendar id to use (default: primary)")
 	token := flag.String("token", os.Getenv(gcal.EnvToken), "path where the refresh token is stored")
+	account := flag.String("account", os.Getenv(gcal.EnvAccount), "google account to authorize with (email); else you are prompted")
 	port := flag.Int("port", 8765, "local port for the OAuth callback")
 	flag.Parse()
 
 	client, err := gcal.New(context.Background(), gcal.Options{
-		CalendarID: *calendar,
+		CalendarID: *calendarID,
 		Token:      *token,
 		Port:       *port,
+		Account:    *account,
+		PromptAccount: func(current string) (string, error) {
+			return tui.PromptAccount(current)
+		},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

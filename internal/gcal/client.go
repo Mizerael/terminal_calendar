@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -104,6 +105,12 @@ type Options struct {
 	CalendarID string
 	// Port is the local port for the OAuth loopback callback.
 	Port int
+	// Account is a fixed Google login hint (email). Overrides PromptAccount.
+	Account string
+	// PromptAccount, when set, lets the user pick the Google account in the
+	// terminal before the OAuth consent page opens. Called only when
+	// authorization is actually needed.
+	PromptAccount func(current string) (string, error)
 }
 
 // Env variable names. Exported so callers can document them.
@@ -112,6 +119,7 @@ const (
 	EnvClientSecret = "GOOGLE_CLIENT_SECRET"
 	EnvRedirectURI  = "GOOGLE_REDIRECT_URI"
 	EnvToken        = "GOOGLE_TOKEN"
+	EnvAccount      = "GOOGLE_ACCOUNT"
 )
 
 func orEnv(v, key string) string {
@@ -130,6 +138,42 @@ func defaultPort() int {
 	return 8765
 }
 
+// resolveAccount decides which Google account (login hint) to use for the
+// OAuth flow: a fixed Account, or the user's choice via PromptAccount. The
+// previously used account is offered as the default choice.
+func (o Options) resolveAccount() (string, error) {
+	if o.Account != "" {
+		return strings.TrimSpace(o.Account), nil
+	}
+	if o.PromptAccount == nil {
+		return "", nil
+	}
+	account, err := o.PromptAccount(loadAccountHint(o.Token))
+	if err != nil {
+		return "", fmt.Errorf("no account selected: %w", err)
+	}
+	return strings.TrimSpace(account), nil
+}
+
+// validateClientCredentials catches the most common causes of Google's
+// "invalid_client" error before the consent page is even reached.
+func validateClientCredentials(clientID, clientSecret string) error {
+	if strings.HasPrefix(clientID, "your_client") || strings.HasPrefix(clientSecret, "your_client") {
+		return fmt.Errorf("OAuth credentials look like the .env.example placeholders.\n" +
+			"Edit .env and replace GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET with the real values\n" +
+			"from your Desktop app at https://console.cloud.google.com/apis/credentials")
+	}
+	if !strings.HasSuffix(clientID, ".apps.googleusercontent.com") {
+		return fmt.Errorf("GOOGLE_CLIENT_ID=%q does not look like a Google OAuth client id\n"+
+			"(it should end with .apps.googleusercontent.com). A GitHub/other id will not work.", clientID)
+	}
+	if len(clientSecret) < 8 {
+		return fmt.Errorf("GOOGLE_CLIENT_SECRET is suspiciously short (%d chars); double check it\n"+
+			"was copied from the same OAuth client as the client id", len(clientSecret))
+	}
+	return nil
+}
+
 // New authenticates (if needed) and returns a ready client.
 func New(ctx context.Context, opts Options) (*Client, error) {
 	opts.ClientID = orEnv(opts.ClientID, EnvClientID)
@@ -140,6 +184,9 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 		return nil, fmt.Errorf("missing OAuth client credentials: set %s and %s\n"+
 			"Create an OAuth client id here: https://console.cloud.google.com/apis/credentials",
 			EnvClientID, EnvClientSecret)
+	}
+	if err := validateClientCredentials(opts.ClientID, opts.ClientSecret); err != nil {
+		return nil, err
 	}
 	if opts.RedirectURL == "" {
 		if opts.Port == 0 {
@@ -173,13 +220,24 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 	}
 
 	tok, err := loadToken(opts.Token)
-	if err != nil || !tok.Valid() {
-		tok, err = authFlow(ctx, cfg, opts.Port)
+	switch {
+	case err != nil:
+		// No cached token yet: run the interactive account flow.
+		tok, err = opts.doAuthFlow(ctx, cfg)
 		if err != nil {
-			return nil, fmt.Errorf("authentication failed: %w", err)
-		}
-		if err := saveToken(opts.Token, tok); err != nil {
 			return nil, err
+		}
+	default:
+		// Cached refresh token: refresh silently. Only fall back to the
+		// interactive flow when the refresh is rejected (revoked credentials).
+		ts := cfg.TokenSource(ctx, tok)
+		if fresh, rerr := ts.Token(); rerr == nil {
+			tok = fresh
+		} else {
+			tok, err = opts.doAuthFlow(ctx, cfg)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -194,6 +252,48 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 	}
 
 	return &Client{svc: svc, calID: calID}, nil
+}
+
+// doAuthFlow runs the interactive account selection and OAuth loopback flow,
+// then persists the new token and the chosen account.
+func (o Options) doAuthFlow(ctx context.Context, cfg *oauth2.Config) (*oauth2.Token, error) {
+	loginHint, err := o.resolveAccount()
+	if err != nil {
+		return nil, err
+	}
+	tok, err := authFlow(ctx, cfg, o.Port, loginHint)
+	if err != nil {
+		return nil, fmt.Errorf("authentication failed: %w", err)
+	}
+	if err := saveToken(o.Token, tok); err != nil {
+		return nil, err
+	}
+	if err := saveAccountHint(o.Token, loginHint); err != nil {
+		return nil, err
+	}
+	return tok, nil
+}
+
+// accountHintPath returns the sidecar file that remembers the email used for
+// the OAuth flow, derived from the token path.
+func accountHintPath(tokenPath string) string {
+	return tokenPath + ".account"
+}
+
+func saveAccountHint(tokenPath, email string) error {
+	if email == "" {
+		_ = os.Remove(accountHintPath(tokenPath))
+		return nil
+	}
+	return os.WriteFile(accountHintPath(tokenPath), []byte(email), 0o600)
+}
+
+func loadAccountHint(tokenPath string) string {
+	b, err := os.ReadFile(accountHintPath(tokenPath))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // ListEvents returns events overlapping the given day, ordered by start time.
@@ -310,12 +410,13 @@ func parseTime(start, end *EDT) (time.Time, error) {
 	return time.Time{}, errors.New("could not determine event time")
 }
 
-// Timezone returns the event timezone (or the system local zone).
+// Timezone returns the event's IANA timezone name, or "" when the event has
+// no explicit zone (the calendar's default applies then).
 func (e *Event) Timezone() string {
-	if e.Start != nil && e.Start.TimeZone != "" {
+	if e.Start != nil {
 		return e.Start.TimeZone
 	}
-	return time.Local.String()
+	return ""
 }
 
 func saveToken(path string, tok *oauth2.Token) error {
@@ -350,8 +451,8 @@ func loadToken(path string) (*oauth2.Token, error) {
 
 // authFlow performs the OAuth loopback flow: opens the consent page in the
 // browser (or prints the URL), then binds a local HTTP server to receive the
-// authorization code.
-func authFlow(ctx context.Context, cfg *oauth2.Config, port int) (*oauth2.Token, error) {
+// authorization code. loginHint pre-selects a Google account when given.
+func authFlow(ctx context.Context, cfg *oauth2.Config, port int, loginHint string) (*oauth2.Token, error) {
 	u, err := url.Parse(cfg.RedirectURL)
 	if err != nil {
 		return nil, err
@@ -364,7 +465,17 @@ func authFlow(ctx context.Context, cfg *oauth2.Config, port int) (*oauth2.Token,
 	redirect := "http://localhost:" + portStr
 	cfg.RedirectURL = redirect
 
-	authURL := cfg.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+	authOptions := []oauth2.AuthCodeOption{oauth2.AccessTypeOffline}
+	if loginHint != "" {
+		// Pre-select the account chosen in the terminal.
+		authOptions = append(authOptions, oauth2.SetAuthURLParam("login_hint", loginHint))
+	} else {
+		// No account chosen: force the account chooser so the user can pick
+		// the browser profile that owns the calendar instead of whatever
+		// account happens to be logged in.
+		authOptions = append(authOptions, oauth2.SetAuthURLParam("prompt", "select_account"))
+	}
+	authURL := cfg.AuthCodeURL("state-token", authOptions...)
 
 	mux := http.NewServeMux()
 	var (
@@ -374,6 +485,19 @@ func authFlow(ctx context.Context, cfg *oauth2.Config, port int) (*oauth2.Token,
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
+			return
+		}
+		// Google redirects here with error=... when consent fails
+		// (e.g. the account is not a test user of the OAuth app).
+		if e := r.URL.Query().Get("error"); e != "" {
+			desc := r.URL.Query().Get("error_description")
+			msg := fmt.Sprintf("authorization denied: %s", e)
+			if desc != "" {
+				msg += ": " + desc
+			}
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprintf(w, "<html><body style='font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh'><h2 style='color:#d33'>Authorization failed</h2><p>%s</p><p style='color:#888'>You can go back to the terminal now.</p></body></html>", htmlEscape(msg))
+			errCh <- errors.New(msg)
 			return
 		}
 		c := r.URL.Query().Get("code")
@@ -390,7 +514,7 @@ func authFlow(ctx context.Context, cfg *oauth2.Config, port int) (*oauth2.Token,
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, "<html><body style='font-family:sans-serif;display:flex;align-items:center;justify-content:center'>"+
+		fmt.Fprint(w, "<html><body style='font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:90vh'>"+
 			"<h2>Authenticated! You may close this tab now.</h2></body></html>")
 		codeCh <- c
 	})
@@ -424,4 +548,23 @@ func authFlow(ctx context.Context, cfg *oauth2.Config, port int) (*oauth2.Token,
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func htmlEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		case '&':
+			b.WriteString("&amp;")
+		case '"':
+			b.WriteString("&quot;")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

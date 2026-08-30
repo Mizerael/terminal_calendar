@@ -61,6 +61,7 @@ all-day event.
 | `GOOGLE_CLIENT_SECRET` | OAuth client secret          | *(required)*            |
 | `GOOGLE_CALENDAR_ID`   | calendar id to use           | `primary`               |
 | `GOOGLE_REDIRECT_URI`  | OAuth redirect URI           | `http://localhost:8765` |
+| `GOOGLE_ACCOUNT`       | pre-select Google account (email); otherwise you are prompted in the terminal | — |
 | `GOOGLE_TOKEN`         | token cache path             | `token.json`            |
 | `PORT`                 | OAuth loopback port          | `8765`                  |
 
@@ -68,9 +69,18 @@ all-day event.
 
 ```
 -calendar <id>    override GOOGLE_CALENDAR_ID
+-account <email>  override GOOGLE_ACCOUNT (pre-selects the account to authorize)
 -token <path>     override GOOGLE_TOKEN
 -port <n>         override PORT
 ```
+
+## Account selection
+
+When authorization is needed and `GOOGLE_ACCOUNT` is not set, a prompt appears
+in the terminal asking which Google account to authorize with. The chosen email
+is passed to Google as a login hint and remembered for later runs (sidecar
+`token.json.account`). Press `esc` to skip and use the browser's account
+chooser instead.
 
 ## Layout
 

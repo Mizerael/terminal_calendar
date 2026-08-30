@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -192,48 +193,85 @@ func (f *form) buildEvent() (*gcal.Event, error) {
 		ev.Description = desc
 	}
 
-	tz := "Local"
-	if f.editing != nil {
-		tz = f.editing.Timezone()
+	// Only send a timeZone the API accepts (a real IANA name). Never invent
+	// one from time.Local: strings like "Local" or "+04:00" are rejected by
+	// Google with a 400 error, which silently broke create/update.
+	tzName := ""
+	if f.editing != nil && f.editing.Start != nil {
+		tzName = f.editing.Start.TimeZone // provided by Google, always valid
+	}
+	if tzName == "" {
+		tzName = localIANATimezone() // best effort from the environment
 	}
 
 	if allDay {
-		ev.Start = &gcal.EDT{Date: startDate, TimeZone: tz}
-		ev.End = &gcal.EDT{Date: endDate, TimeZone: tz}
+		ev.Start = &gcal.EDT{Date: startDate, TimeZone: tzName}
+		ev.End = &gcal.EDT{Date: endDate, TimeZone: tzName}
 		return ev, nil
 	}
 
 	if endTime == "" {
 		endTime = startTime
 	}
-	st, err := time.ParseInLocation("15:04", startTime, time.Local)
+	clock, err := parseClock("start", startTime, f)
 	if err != nil {
-		return nil, f.fail("start time must be HH:MM")
+		return nil, err
 	}
-	et, err := time.ParseInLocation("15:04", endTime, time.Local)
+	endClock, err := parseClock("end", endTime, f)
 	if err != nil {
-		return nil, f.fail("end time must be HH:MM")
+		return nil, err
 	}
 
-	start := merge(sd, st)
-	end := merge(ed, et)
+	// Interpret the typed wall-clock time directly in the target zone so the
+	// stored instant matches what the user intended.
+	loc := time.Local
+	if tzName != "" {
+		if l, err := time.LoadLocation(tzName); err == nil {
+			loc = l
+		}
+	}
+	start := time.Date(sd.Year(), sd.Month(), sd.Day(), clock.hour, clock.minute, 0, 0, loc)
+	end := time.Date(ed.Year(), ed.Month(), ed.Day(), endClock.hour, endClock.minute, 0, 0, loc)
 	if !end.After(start) {
 		return nil, f.fail("end must be after start")
 	}
 
-	ev.Start = &gcal.EDT{
-		DateTime: start.Format(time.RFC3339),
-		TimeZone: tz,
+	layout := "2006-01-02T15:04:05" // timezone carried by the timeZone field
+	if tzName == "" {
+		layout = time.RFC3339 // no timeZone: embed the offset in dateTime
 	}
-	ev.End = &gcal.EDT{
-		DateTime: end.Format(time.RFC3339),
-		TimeZone: tz,
-	}
+	ev.Start = &gcal.EDT{DateTime: start.Format(layout), TimeZone: tzName}
+	ev.End = &gcal.EDT{DateTime: end.Format(layout), TimeZone: tzName}
 	return ev, nil
 }
 
-func merge(day, clock time.Time) time.Time {
-	return time.Date(day.Year(), day.Month(), day.Day(), clock.Hour(), clock.Minute(), 0, 0, day.Location())
+type clock struct{ hour, minute int }
+
+func parseClock(label, v string, f *form) (clock, error) {
+	t, err := time.ParseInLocation("15:04", v, time.Local)
+	if err != nil {
+		return clock{}, f.fail(label + " time must be HH:MM")
+	}
+	return clock{hour: t.Hour(), minute: t.Minute()}, nil
+}
+
+// localIANATimezone returns the user's IANA timezone name when it can be
+// determined, otherwise "" (the API then uses the calendar's default zone).
+func localIANATimezone() string {
+	if tz := os.Getenv("TZ"); tz != "" {
+		if _, err := time.LoadLocation(tz); err == nil {
+			return tz
+		}
+	}
+	if link, err := os.Readlink("/etc/localtime"); err == nil {
+		if i := strings.Index(link, "zoneinfo/"); i >= 0 {
+			name := link[i+len("zoneinfo/"):]
+			if _, err := time.LoadLocation(name); err == nil {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 func (f *form) fail(msg string) error {
