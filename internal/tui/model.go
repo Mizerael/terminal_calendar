@@ -9,7 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
+	"github.com/Mizerael/terminal_calendar/internal/domain"
+	"github.com/Mizerael/terminal_calendar/internal/usecase"
 )
 
 type screen int
@@ -22,7 +23,7 @@ const (
 
 // msgEventsLoaded carries the fetched events for a week (weekStart = Monday).
 type msgEventsLoaded struct {
-	events    []gcal.Event
+	events    []domain.Event
 	weekStart time.Time
 }
 
@@ -36,25 +37,19 @@ type msgError struct{ err error }
 type msgSaved struct{}
 type msgDeleted struct{}
 
-// eventAPI is the subset of the calendar API the TUI needs.
-type eventAPI interface {
-	ListCalendars(ctx context.Context) ([]gcal.Calendar, error)
-	ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]gcal.Event, error)
-	CreateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error)
-	UpdateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error)
-	DeleteEventIn(ctx context.Context, calID, id string) error
-}
-
-// Model is the root bubbletea model.
+// Model is the root bubbletea model. It acts as the controller/presenter of
+// the Clean Architecture stack: it owns bubbletea framework state and painting,
+// and delegates calendar operations to a usecase.CalendarService.
 type Model struct {
-	client eventAPI
-	ctx    context.Context
+	svc *usecase.CalendarService
+	sel usecase.Selection
+	ctx context.Context
 
 	// weekStart is the Monday (00:00 local) of the displayed week. The week
 	// spans [weekStart, weekStart + 7 days).
 	weekStart time.Time
 	// weekEvents[dayIndex] holds that day's events, sorted by start time.
-	weekEvents [7][]gcal.Event
+	weekEvents [7][]domain.Event
 	// dayIndex is the focused day within the week (0 = Monday).
 	dayIndex int
 	// eventIndex is the focused event within the focused day; -1 means none.
@@ -73,39 +68,37 @@ type Model struct {
 
 	// popup is a modal detail overlay for a specific event.
 	popup      bool
-	popupEvent *gcal.Event
+	popupEvent *domain.Event
 
 	screen     screen
 	form       *form
-	confirm    *gcal.Event // event awaiting delete confirmation
+	confirm    *domain.Event // event awaiting delete confirmation
 	confirmErr error
 	help       bool
 	width      int
 	height     int
 	quitting   bool
 
-	// Multi-calendar state. calendars holds the user's calendars; isEnabled
-	// selects which are loaded and shown merged; targetCalID is the calendar
-	// new events are created into.
-	calendars   []gcal.Calendar
-	isEnabled   map[string]bool
-	targetCalID string
-	statePath   string
+	// calendars holds the user's calendars; sel selects which are loaded and
+	// shown merged and which is the create-target (see usecase.Selection).
+	calendars []domain.Calendar
+	statePath string
 	// picker is the calendar visibility/target overlay.
 	picker      bool
 	pickerIndex int
 	pickerErr   error
 }
 
-func New(client eventAPI) (*Model, error) {
+// New builds the model with a disposed calendar selection and starts loading.
+func New(svc *usecase.CalendarService) (*Model, error) {
 	m := &Model{
-		client:     client,
+		svc:        svc,
 		ctx:        context.Background(),
-		weekStart:  mondayOf(today()),
+		weekStart:  domain.MondayOf(today()),
 		form:       newForm(),
 		cursorHour: time.Now().Hour(),
 		scrollHour: defaultScrollHour,
-		isEnabled:  map[string]bool{},
+		sel:        usecase.Selection{Enabled: map[string]bool{}},
 	}
 	m.loadState()
 	m.reload()
@@ -118,12 +111,6 @@ func today() time.Time {
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 }
 
-// mondayOf returns midnight (local) of the Monday of the week containing day.
-func mondayOf(day time.Time) time.Time {
-	wd := (int(day.Weekday()) + 6) % 7 // Mon=0 … Sun=6
-	return day.AddDate(0, 0, -wd)
-}
-
 func (m *Model) Init() tea.Cmd {
 	return m.loadEvents
 }
@@ -133,7 +120,7 @@ func (m *Model) reload() tea.Cmd {
 }
 
 func (m *Model) loadEvents() tea.Msg {
-	calendars, err := m.client.ListCalendars(m.ctx)
+	calendars, err := m.svc.LoadCalendars(m.ctx)
 	if err != nil {
 		return msgError{err: err}
 	}
@@ -141,23 +128,14 @@ func (m *Model) loadEvents() tea.Msg {
 	return msgCalendarsLoaded{weekStart: m.weekStart}
 }
 
-// loadWeekEvents fetches events for every enabled calendar and merges them
-// into a single flat week-long list.
+// loadWeekEvents fetches events for every enabled calendar via the use cases
+// and returns them as a single flat week-long list.
 func (m *Model) loadWeekEvents() tea.Msg {
-	start := m.weekStart
-	end := start.Add(7 * 24 * time.Hour)
-	var all []gcal.Event
-	for _, cal := range m.calendars {
-		if !m.isEnabled[cal.ID] {
-			continue
-		}
-		items, err := m.client.ListEventsRangeIn(m.ctx, cal.ID, start, end)
-		if err != nil {
-			return msgError{err: err}
-		}
-		all = append(all, items...)
+	events, err := m.svc.LoadWeek(m.ctx, m.weekStart, m.sel.Enabled)
+	if err != nil {
+		return msgError{err: err}
 	}
-	return msgEventsLoaded{events: all, weekStart: start}
+	return msgEventsLoaded{events: events, weekStart: m.weekStart}
 }
 
 // focusedDay returns the time.Time midnight for the focused day.
@@ -166,7 +144,7 @@ func (m *Model) focusedDay() time.Time {
 }
 
 // focusedEvent returns a pointer to the focused event, or nil.
-func (m *Model) focusedEvent() *gcal.Event {
+func (m *Model) focusedEvent() *domain.Event {
 	if m.dayIndex < 0 || m.dayIndex > 6 || m.eventIndex < 0 {
 		return nil
 	}
@@ -212,7 +190,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case msgCalendarsLoaded:
-		m.applyDefaultCalendarSelection()
+		m.reconcileSelection()
 		m.saveState()
 		return m, m.loadWeekEvents
 
@@ -251,31 +229,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // groupEvents buckets a flat week-long list into per-day slices.
-func (m *Model) groupEvents(events []gcal.Event) {
-	var out [7][]gcal.Event
+func (m *Model) groupEvents(events []domain.Event) {
+	var out [7][]domain.Event
 	for _, e := range events {
-		idx := m.dayIndexForEvent(&e)
+		idx := domain.DayIndex(&e, m.weekStart)
 		if idx >= 0 {
 			out[idx] = append(out[idx], e)
 		}
 	}
 	m.weekEvents = out
-}
-
-// dayIndexForEvent maps an event to its day index within the current week.
-func (m *Model) dayIndexForEvent(e *gcal.Event) int {
-	start, err := e.StartTime()
-	if err != nil {
-		return -1
-	}
-	// Normalize to local midnight on the event's own date.
-	dayMid := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
-	startWeek := mondayOf(dayMid)
-	diff := int(dayMid.Sub(startWeek).Hours()) / 24
-	if diff < 0 || diff > 6 {
-		return -1
-	}
-	return diff
 }
 
 // clampCursor keeps the focused day within range and the event index within
@@ -288,7 +250,7 @@ func (m *Model) clampCursor() {
 		m.dayIndex = 6
 	}
 	if m.weekEvents[m.dayIndex] == nil {
-		m.weekEvents[m.dayIndex] = []gcal.Event{}
+		m.weekEvents[m.dayIndex] = []domain.Event{}
 	}
 	if m.eventIndex >= len(m.weekEvents[m.dayIndex]) {
 		m.eventIndex = 0
@@ -300,7 +262,7 @@ func (m *Model) clampCursor() {
 
 // forEachEvent yields each event in week order as (dayIndex, eventIndex, *Event).
 // on is invoked only for non-empty days.
-func (m *Model) forEachEvent(on func(dayIdx, evtIdx int, e *gcal.Event)) {
+func (m *Model) forEachEvent(on func(dayIdx, evtIdx int, e *domain.Event)) {
 	for d := 0; d < 7; d++ {
 		for i, e := range m.weekEvents[d] {
 			on(d, i, &e)
@@ -324,7 +286,7 @@ func (m *Model) firstEventIndex() (int, int) {
 // otherwise the last-known cursor hour.
 func (m *Model) focusedHour() int {
 	if ev := m.focusedEvent(); ev != nil {
-		if t, err := ev.StartTime(); err == nil && !t.IsZero() {
+		if t := ev.StartTime(); !t.IsZero() {
 			return t.Hour()
 		}
 	}
@@ -415,9 +377,8 @@ func (m *Model) moveToDay(delta int) {
 
 	want := time.Time{}
 	if ev := m.focusedEvent(); ev != nil {
-		if t, err := ev.StartTime(); err == nil {
-			want = t
-		} else {
+		want = ev.StartTime()
+		if want.IsZero() {
 			m.eventIndex = -1
 			return
 		}
@@ -436,10 +397,7 @@ func (m *Model) moveToDay(delta int) {
 	best := 0
 	bestGap := int64(1 << 60)
 	for i := range day {
-		t, err := day[i].StartTime()
-		if err != nil {
-			continue
-		}
+		t := day[i].StartTime()
 		gap := abs64(t.Unix() - want.Unix())
 		if gap < bestGap {
 			bestGap = gap
@@ -457,7 +415,7 @@ func abs64(v int64) int64 {
 }
 
 func (m *Model) resetWeek() {
-	m.weekEvents = [7][]gcal.Event{}
+	m.weekEvents = [7][]domain.Event{}
 	m.loaded = false
 	m.loadErr = nil
 	m.eventIndex = -1
@@ -519,7 +477,7 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetWeek()
 		return m, m.reload()
 	case "t":
-		m.weekStart = mondayOf(today())
+		m.weekStart = domain.MondayOf(today())
 		m.resetWeek()
 		return m, m.reload()
 
@@ -584,15 +542,11 @@ func (m *Model) updatePopup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "y", "enter":
-		id := m.confirm.Id
-		calID := m.confirm.CalendarID
-		if calID == "" {
-			calID = m.targetCalID
-		}
+		ev := m.confirm
 		m.confirm = nil
 		m.screen = screenList
 		return m, func() tea.Msg {
-			if err := m.client.DeleteEventIn(m.ctx, calID, id); err != nil {
+			if err := m.svc.Delete(m.ctx, m.sel.Target, ev); err != nil {
 				return msgError{err: err}
 			}
 			return msgDeleted{}
@@ -641,18 +595,14 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) saveEvent(ev *gcal.Event, create bool) tea.Cmd {
+func (m *Model) saveEvent(ev *domain.Event, create bool) tea.Cmd {
 	ctx := m.ctx
 	return func() tea.Msg {
 		var err error
 		if create {
-			_, err = m.client.CreateEventIn(ctx, m.targetCalID, ev)
+			_, err = m.svc.Create(ctx, m.sel.Target, ev)
 		} else {
-			calID := ev.CalendarID
-			if calID == "" {
-				calID = m.targetCalID
-			}
-			_, err = m.client.UpdateEventIn(ctx, calID, ev)
+			_, err = m.svc.Update(ctx, m.sel.Target, ev)
 		}
 		if err != nil {
 			return msgError{err: err}

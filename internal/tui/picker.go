@@ -26,7 +26,7 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.togglePickerCalendar()
 	case "t":
 		if i := m.pickerIndex; i >= 0 && i < len(m.calendars) {
-			m.targetCalID = m.calendars[i].ID
+			m.sel.Target = m.calendars[i].ID
 			m.saveState()
 		}
 	case "r":
@@ -41,7 +41,7 @@ func (m *Model) togglePickerCalendar() {
 		return
 	}
 	id := m.calendars[m.pickerIndex].ID
-	m.isEnabled[id] = !m.isEnabled[id]
+	m.sel.Enabled[id] = !m.sel.Enabled[id]
 	m.saveState()
 }
 
@@ -52,10 +52,10 @@ func (m *Model) renderPicker() string {
 	for i, cal := range m.calendars {
 		mark := "  "
 		check := "[ ]"
-		if m.isEnabled[cal.ID] {
+		if m.sel.Enabled[cal.ID] {
 			check = "[x]"
 		}
-		if cal.ID == m.targetCalID {
+		if cal.ID == m.sel.Target {
 			mark = "→ "
 		}
 		line := fmt.Sprintf("%s%s %s", mark, check, cal.Summary)

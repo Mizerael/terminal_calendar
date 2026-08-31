@@ -1,4 +1,8 @@
-// Package gcal wraps the Google Calendar API for the TUI.
+// Package gcal is the Clean Architecture gateway: it adapts the Google
+// Calendar API (a framework/driver) to the use-case port (usecase.CalendarGateway)
+// and translates between the repo's domain types (internal/domain) and the
+// google.golang.org/api/calendar/v3 types. All Google-specific and OAuth
+// concerns live here and nowhere else.
 package gcal
 
 import (
@@ -18,84 +22,12 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
+
+	"github.com/Mizerael/terminal_calendar/internal/domain"
 )
 
-// Event is the subset of a calendar event the UI needs. CalendarID and
-// CalendarSummary identify which calendar the event belongs to and are filled
-// in by the query that returned it, so a merged multi-calendar view can color
-// and route events.
-type Event struct {
-	Id               string `json:"id,omitempty"`
-	Etag             string `json:"etag,omitempty"`
-	Summary          string `json:"summary,omitempty"`
-	Location         string `json:"location,omitempty"`
-	Description      string `json:"description,omitempty"`
-	RecurringEventId string `json:"recurringEventId,omitempty"`
-	Start            *EDT   `json:"start,omitempty"`
-	End              *EDT   `json:"end,omitempty"`
-
-	CalendarID      string `json:"calendarId,omitempty"`
-	CalendarSummary string `json:"calendarSummary,omitempty"`
-}
-
-// Calendar is the subset of a Google Calendar (CalendarList entry) the UI uses
-// to list, enable and target calendars.
-type Calendar struct {
-	ID      string
-	Summary string
-	Primary bool
-}
-
-// EDT mirrors the calendar API's EventDateTime.
-type EDT struct {
-	Date     string `json:"date,omitempty"`
-	DateTime string `json:"dateTime,omitempty"`
-	TimeZone string `json:"timeZone,omitempty"`
-}
-
-func toAPIEvent(e *Event) *calendar.Event {
-	if e == nil {
-		return nil
-	}
-	out := &calendar.Event{
-		Id:               e.Id,
-		Etag:             e.Etag,
-		Summary:          e.Summary,
-		Location:         e.Location,
-		Description:      e.Description,
-		RecurringEventId: e.RecurringEventId,
-	}
-	if e.Start != nil {
-		out.Start = &calendar.EventDateTime{Date: e.Start.Date, DateTime: e.Start.DateTime, TimeZone: e.Start.TimeZone}
-	}
-	if e.End != nil {
-		out.End = &calendar.EventDateTime{Date: e.End.Date, DateTime: e.End.DateTime, TimeZone: e.End.TimeZone}
-	}
-	return out
-}
-
-func fromAPIEvent(e *calendar.Event) *Event {
-	if e == nil {
-		return nil
-	}
-	out := &Event{
-		Id:               e.Id,
-		Etag:             e.Etag,
-		Summary:          e.Summary,
-		Location:         e.Location,
-		Description:      e.Description,
-		RecurringEventId: e.RecurringEventId,
-	}
-	if e.Start != nil {
-		out.Start = &EDT{Date: e.Start.Date, DateTime: e.Start.DateTime, TimeZone: e.Start.TimeZone}
-	}
-	if e.End != nil {
-		out.End = &EDT{Date: e.End.Date, DateTime: e.End.DateTime, TimeZone: e.End.TimeZone}
-	}
-	return out
-}
-
-// Client talks to the Google Calendar API.
+// Client talks to the Google Calendar API and satisfies the use-case gateway
+// contract for calendar queries and writes.
 type Client struct {
 	svc   *calendar.Service
 	calID string
@@ -115,7 +47,7 @@ type Options struct {
 	// Token is the path where the refresh token is stored. Defaults to
 	// $GOOGLE_TOKEN or "token.json".
 	Token string
-	// CalendarID is the calendar to operate on. Empty means "primary".
+	// CalendarID is the default calendar to operate on. Empty means "primary".
 	CalendarID string
 	// Port is the local port for the OAuth loopback callback.
 	Port int
@@ -310,25 +242,26 @@ func loadAccountHint(tokenPath string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// ListEvents returns events overlapping the given day, ordered by start time.
-func (c *Client) ListEvents(ctx context.Context, day time.Time) ([]Event, error) {
-	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+// ListEvents returns events overlapping the given day, ordered by start time,
+// from the client's configured calendar.
+func (c *Client) ListEvents(ctx context.Context, day time.Time) ([]domain.Event, error) {
+	start := domain.StartOfDay(day)
 	return c.ListEventsRange(ctx, start, start.Add(24*time.Hour))
 }
 
 // ListCalendars returns the calendars the user can see, in the API's default
 // (typically summary) order.
-func (c *Client) ListCalendars(ctx context.Context) ([]Calendar, error) {
+func (c *Client) ListCalendars(ctx context.Context) ([]domain.Calendar, error) {
 	res, err := c.svc.CalendarList.List().Context(ctx).Do()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Calendar, 0, len(res.Items))
+	out := make([]domain.Calendar, 0, len(res.Items))
 	for _, item := range res.Items {
 		if item == nil {
 			continue
 		}
-		out = append(out, Calendar{
+		out = append(out, domain.Calendar{
 			ID:      item.Id,
 			Summary: item.Summary,
 			Primary: item.Primary,
@@ -338,21 +271,20 @@ func (c *Client) ListCalendars(ctx context.Context) ([]Calendar, error) {
 }
 
 // ListEventsRange returns all events overlapping [start, end) from the
-// client's configured calendar, ordered by start time. A single API call
-// covers an arbitrary range (e.g. a whole week).
-func (c *Client) ListEventsRange(ctx context.Context, start, end time.Time) ([]Event, error) {
+// client's configured calendar, ordered by start time.
+func (c *Client) ListEventsRange(ctx context.Context, start, end time.Time) ([]domain.Event, error) {
 	return c.ListEventsRangeIn(ctx, c.calID, start, end)
 }
 
 // ListEventsRangeIn returns events overlapping [start, end) from the given
 // calendar, tagging each returned event with that calendar's id and summary.
-func (c *Client) ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]Event, error) {
+func (c *Client) ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]domain.Event, error) {
 	return c.listEventsIn(ctx, calID, calID, start, end)
 }
 
 // listEventsIn is the shared implementation: it queries events and attaches
-// the owning calendar's id/summary to each result.
-func (c *Client) listEventsIn(ctx context.Context, calID, summary string, start, end time.Time) ([]Event, error) {
+// the owning calendar's id to each result.
+func (c *Client) listEventsIn(ctx context.Context, calID, summary string, start, end time.Time) ([]domain.Event, error) {
 	evs, err := c.svc.Events.List(calID).
 		TimeMin(start.Format(time.RFC3339)).
 		TimeMax(end.Format(time.RFC3339)).
@@ -363,22 +295,23 @@ func (c *Client) listEventsIn(ctx context.Context, calID, summary string, start,
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Event, 0, len(evs.Items))
+	out := make([]domain.Event, 0, len(evs.Items))
 	for _, e := range evs.Items {
 		ev := fromAPIEvent(e)
-		if ev != nil {
-			ev.CalendarID = calID
-			ev.CalendarSummary = summary
-			out = append(out, *ev)
+		if ev == nil {
+			continue
 		}
+		ev.CalendarID = calID
+		ev.CalendarSummary = summary
+		out = append(out, *ev)
 	}
 	return out, nil
 }
 
 // ListUpcoming returns events from now until `days` days ahead.
-func (c *Client) ListUpcoming(ctx context.Context, days int) ([]Event, error) {
+func (c *Client) ListUpcoming(ctx context.Context, days int) ([]domain.Event, error) {
 	now := time.Now()
-	end := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, days+1)
+	end := domain.StartOfDay(now).AddDate(0, 0, days+1)
 
 	evs, err := c.svc.Events.List(c.calID).
 		TimeMin(now.Format(time.RFC3339)).
@@ -390,7 +323,7 @@ func (c *Client) ListUpcoming(ctx context.Context, days int) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Event, 0, len(evs.Items))
+	out := make([]domain.Event, 0, len(evs.Items))
 	for _, e := range evs.Items {
 		ev := fromAPIEvent(e)
 		if ev != nil {
@@ -401,12 +334,12 @@ func (c *Client) ListUpcoming(ctx context.Context, days int) ([]Event, error) {
 }
 
 // CreateEvent inserts a new event into the client's configured calendar.
-func (c *Client) CreateEvent(ctx context.Context, e *Event) (*Event, error) {
+func (c *Client) CreateEvent(ctx context.Context, e *domain.Event) (*domain.Event, error) {
 	return c.CreateEventIn(ctx, c.calID, e)
 }
 
 // CreateEventIn inserts a new event into the given calendar.
-func (c *Client) CreateEventIn(ctx context.Context, calID string, e *Event) (*Event, error) {
+func (c *Client) CreateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
 	api := toAPIEvent(e)
 	res, err := c.svc.Events.Insert(calID, api).Context(ctx).Do()
 	if err != nil {
@@ -417,18 +350,18 @@ func (c *Client) CreateEventIn(ctx context.Context, calID string, e *Event) (*Ev
 
 // UpdateEvent replaces an existing event identified by e.Id in the client's
 // configured calendar.
-func (c *Client) UpdateEvent(ctx context.Context, e *Event) (*Event, error) {
+func (c *Client) UpdateEvent(ctx context.Context, e *domain.Event) (*domain.Event, error) {
 	return c.UpdateEventIn(ctx, c.calID, e)
 }
 
 // UpdateEventIn replaces an existing event identified by e.Id in the given
 // calendar.
-func (c *Client) UpdateEventIn(ctx context.Context, calID string, e *Event) (*Event, error) {
-	if e.Id == "" {
+func (c *Client) UpdateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
+	if e.ID == "" {
 		return nil, errors.New("event has no id")
 	}
 	api := toAPIEvent(e)
-	res, err := c.svc.Events.Update(calID, e.Id, api).Context(ctx).Do()
+	res, err := c.svc.Events.Update(calID, e.ID, api).Context(ctx).Do()
 	if err != nil {
 		return nil, err
 	}
@@ -445,49 +378,100 @@ func (c *Client) DeleteEventIn(ctx context.Context, calID, id string) error {
 	return c.svc.Events.Delete(calID, id).Context(ctx).Do()
 }
 
-// StartTime returns the event start as a time.Time, falling back to the
-// event end if it is a full-day event without explicit time.
-func (e *Event) StartTime() (time.Time, error) {
-	return parseTime(e.Start, e.End)
+// ---- domain <-> API mapping ----
+
+// toAPIEvent converts a domain event to the Google Calendar API shape. All-day
+// events carry date-only fields; timed events prefer a naive dateTime plus an
+// explicit IANA timeZone (which Google accepts) and fall back to RFC3339 (with
+// an embedded offset) when no timezone is known.
+func toAPIEvent(e *domain.Event) *calendar.Event {
+	if e == nil {
+		return nil
+	}
+	out := &calendar.Event{
+		Id:               e.ID,
+		Summary:          e.Summary,
+		Location:         e.Location,
+		Description:      e.Description,
+		RecurringEventId: e.RecurringEventID,
+	}
+	if e.AllDay {
+		out.Start = &calendar.EventDateTime{Date: e.Start.Format("2006-01-02"), TimeZone: e.TimeZone}
+		out.End = &calendar.EventDateTime{Date: e.EndTime().Format("2006-01-02"), TimeZone: e.TimeZone}
+		return out
+	}
+	layout := "2006-01-02T15:04:05" // timezone carried by the timeZone field
+	if e.TimeZone == "" {
+		layout = time.RFC3339 // no timeZone: embed the offset in dateTime
+	}
+	out.Start = &calendar.EventDateTime{DateTime: e.Start.Format(layout), TimeZone: e.TimeZone}
+	out.End = &calendar.EventDateTime{DateTime: e.EndTime().Format(layout), TimeZone: e.TimeZone}
+	return out
 }
 
-// EndTime returns the event end as a time.Time.
-func (e *Event) EndTime() (time.Time, error) {
-	end := e.End
-	if end == nil {
-		end = e.Start
+// fromAPIEvent converts a Google Calendar API event to a domain event, parsing
+// times into concrete time.Time values.
+func fromAPIEvent(e *calendar.Event) *domain.Event {
+	if e == nil {
+		return nil
 	}
-	return parseTime(end, end)
-}
-
-// AllDay reports whether the event is a full-day event.
-func (e *Event) AllDay() bool { return e.Start != nil && e.Start.Date != "" }
-
-func parseTime(start, end *EDT) (time.Time, error) {
-	if start == nil {
-		return time.Time{}, errors.New("event has no start time")
+	out := &domain.Event{
+		ID:               e.Id,
+		Summary:          e.Summary,
+		Location:         e.Location,
+		Description:      e.Description,
+		RecurringEventID: e.RecurringEventId,
 	}
-	if start.Date != "" {
-		return time.ParseInLocation("2006-01-02", start.Date, time.Local)
-	}
-	if start.DateTime != "" {
-		return time.Parse(time.RFC3339, start.DateTime)
-	}
-	// All-day events may carry both empty fields and a date only on End.
-	// Fall back to End (e.g. Microsoft-imported calendars).
-	if end != nil && end.DateTime != "" {
-		return time.Parse(time.RFC3339, end.DateTime)
-	}
-	return time.Time{}, errors.New("could not determine event time")
-}
-
-// Timezone returns the event's IANA timezone name, or "" when the event has
-// no explicit zone (the calendar's default applies then).
-func (e *Event) Timezone() string {
 	if e.Start != nil {
-		return e.Start.TimeZone
+		out.TimeZone = e.Start.TimeZone
+		if e.Start.Date != "" {
+			if t, err := time.Parse("2006-01-02", e.Start.Date); err == nil {
+				out.Start = t
+				out.AllDay = true
+			}
+		} else if e.Start.DateTime != "" {
+			if t, ok := parseAPIDateTime(e.Start.DateTime, e.Start.TimeZone); ok {
+				out.Start = t
+			}
+		}
 	}
-	return ""
+	if e.End != nil {
+		if e.End.Date != "" {
+			if t, err := time.Parse("2006-01-02", e.End.Date); err == nil {
+				out.End = t
+			}
+		} else if e.End.DateTime != "" {
+			if t, ok := parseAPIDateTime(e.End.DateTime, e.End.TimeZone); ok {
+				out.End = t
+			}
+		}
+	}
+	if out.End.IsZero() {
+		// All-day events from Google often omit an explicit end.
+		out.End = out.Start.AddDate(0, 0, 1)
+		if !out.AllDay {
+			out.End = out.Start
+		}
+	}
+	return out
+}
+
+// parseAPIDateTime parses a Google EventDateTime value. When a timeZone is
+// given the dateTime is treated as wall-clock time in that zone (Google omits
+// the offset and sends it as a separate field); otherwise the dateTime must
+// carry its own offset (RFC3339).
+func parseAPIDateTime(v, zone string) (time.Time, bool) {
+	if zone != "" {
+		if loc, err := time.LoadLocation(zone); err == nil {
+			if t, err := time.ParseInLocation("2006-01-02T15:04:05", v, loc); err == nil {
+				return t, true
+			}
+		}
+	}
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
 }
 
 func saveToken(path string, tok *oauth2.Token) error {
