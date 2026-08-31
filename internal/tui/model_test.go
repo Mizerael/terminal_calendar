@@ -499,6 +499,45 @@ func TestMondayOf(t *testing.T) {
 	}
 }
 
+// TestGridRender checks the grid lays out hour spans and clash markers, and
+// prints the rendered output for visual inspection.
+func TestGridRender(t *testing.T) {
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	// events: Mon 09-10 "Standup", Mon 09:30-11 "Deep", Tue all-day "Holiday",
+	// Wed 14-16 "Workshop"
+	f := &fakeAPI{events: []gcal.Event{
+		mkEvent("Standup", "a", 9, 0),
+		{Summary: "Deep", Id: "b",
+			Start: &gcal.EDT{DateTime: "2026-08-31T09:30:00Z"},
+			End:   &gcal.EDT{DateTime: "2026-08-31T11:00:00Z"}},
+		{Summary: "Holiday", Id: "c", Start: &gcal.EDT{Date: "2026-09-01"}, End: &gcal.EDT{Date: "2026-09-01"}},
+		{Summary: "Workshop", Id: "d",
+			Start: &gcal.EDT{DateTime: "2026-09-02T14:00:00Z"},
+			End:   &gcal.EDT{DateTime: "2026-09-02T16:00:00Z"}},
+	}}
+	m, _ := newTestModel(f)
+	m.weekStart = mon
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 28})
+	m = load(t, m, f)
+	m.dayIndex = 0
+	m.eventIndex = 0
+
+	grid := m.renderGrid()
+	t.Logf("grid output:\n---\n%s\n---", grid)
+	if !strings.Contains(grid, "Standup") {
+		t.Errorf("grid should contain Standup")
+	}
+	if !strings.Contains(grid, "Workshop") {
+		t.Errorf("grid should contain Workshop")
+	}
+	if !strings.Contains(grid, "all-day") {
+		t.Errorf("grid should contain the all-day banner")
+	}
+	if !strings.Contains(grid, "2x") {
+		t.Errorf("grid should mark the 09:00 clash with 2x")
+	}
+}
+
 // TestWeekRendersSmoke ensures View() does not panic for the week and popup
 // states (catching layout bugs) and produces non-empty output.
 func TestWeekRendersSmoke(t *testing.T) {
@@ -537,5 +576,133 @@ func TestWeekRendersSmoke(t *testing.T) {
 	m2 = load(t, m2, f)
 	if m2.View() == "" {
 		t.Fatal("View() empty on narrow terminal")
+	}
+}
+
+func TestHourRange(t *testing.T) {
+	// timed event 09:00-11:00
+	e := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T11:00:00Z"}}
+	s, en, ok := hourRange(e)
+	if !ok || s != 9 || en != 11 {
+		t.Errorf("hourRange = %d,%d,%v, want 9,11,true", s, en, ok)
+	}
+
+	// all-day event -> not ok
+	ad := &gcal.Event{Start: &gcal.EDT{Date: "2026-08-31"}, End: &gcal.EDT{Date: "2026-08-31"}}
+	if _, _, ok := hourRange(ad); ok {
+		t.Error("all-day event should report ok=false")
+	}
+
+	// zero-length event -> at least one hour
+	zl := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T10:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T10:00:00Z"}}
+	s, en, ok = hourRange(zl)
+	if !ok || s != 10 || en != 11 {
+		t.Errorf("zero-length hourRange = %d,%d,%v, want 10,11,true", s, en, ok)
+	}
+
+	// event crossing local midnight (23:30 -> 00:30 next day). Construct the
+	// wall-clock times in the machine's own zone so the crossing is guaranteed
+	// regardless of where the test runs.
+	loc := time.Local
+	sLoc := time.Date(2026, 9, 1, 23, 30, 0, 0, loc)
+	eLoc := time.Date(2026, 9, 2, 0, 30, 0, 0, loc)
+	cross := &gcal.Event{
+		Start: &gcal.EDT{DateTime: sLoc.Format(time.RFC3339)},
+		End:   &gcal.EDT{DateTime: eLoc.Format(time.RFC3339)},
+	}
+	s, en, ok = hourRange(cross)
+	if !ok {
+		t.Fatal("crossing event should parse")
+	}
+	if s != 23 {
+		t.Errorf("crossing event start hour = %d, want 23", s)
+	}
+	if en != 24 {
+		t.Errorf("crossing event end hour = %d, want 24 (past local midnight)", en)
+	}
+}
+
+func TestColWidth(t *testing.T) {
+	m := &Model{}
+	m.width = 100
+	if got := m.colW(); got != 13 {
+		t.Errorf("colW(100) = %d, want 13", got)
+	}
+	m.width = 40
+	if got := m.colW(); got != 8 {
+		t.Errorf("colW(40) = %d, want 8 (clamped to min)", got)
+	}
+	m.width = 200
+	if got := m.colW(); got != 16 {
+		t.Errorf("colW(200) = %d, want 16 (clamped to max)", got)
+	}
+}
+
+func TestScrollKeysAdjustWindow(t *testing.T) {
+	m := &Model{scrollHour: 6, cursorHour: 6}
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 28})
+	// rows = gridRows = (28-4)=24 -> capped 20
+	m = upd(t, m, msgKey("ctrl+d"))
+	if m.scrollHour != 12 {
+		t.Errorf("after ctrl+d scrollHour = %d, want 12", m.scrollHour)
+	}
+	m = upd(t, m, msgKey("ctrl+d"))
+	m = upd(t, m, msgKey("ctrl+d"))
+	m = upd(t, m, msgKey("ctrl+d"))
+	// expect to clamp at 24 - effectiveRows
+	rows := m.effectiveRows()
+	if m.scrollHour > 24-rows {
+		t.Errorf("scrollHour %d exceeds max %d", m.scrollHour, 24-rows)
+	}
+	// scroll up all the way
+	for i := 0; i < 10; i++ {
+		m = upd(t, m, msgKey("ctrl+u"))
+	}
+	if m.scrollHour != 0 {
+		t.Errorf("after repeated ctrl+u scrollHour = %d, want 0", m.scrollHour)
+	}
+}
+
+func TestEnsureVisible(t *testing.T) {
+	m := &Model{scrollHour: 6, cursorHour: 6}
+	m.weekEvents[0] = []gcal.Event{mkEvent("late", "x", 22, 0)}
+	m.dayIndex = 0
+	m.eventIndex = 0
+	m.ensureVisible(10) // window [6,16)
+	if m.scrollHour != 13 {
+		t.Errorf("ensureVisible scrolled to %d, want 13 (hour 22-10+1)", m.scrollHour)
+	}
+}
+
+func TestGridNavigationByEvent(t *testing.T) {
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	f := &fakeAPI{events: []gcal.Event{
+		mkEvent("Early", "a", 8, 0), // Mon 08
+		mkEvent("Late", "b", 20, 0), // Mon 20
+		{Summary: "Night", Id: "c", Start: &gcal.EDT{DateTime: "2026-09-02T23:00:00+04:00"}, End: &gcal.EDT{DateTime: "2026-09-03T00:30:00+04:00"}}, // Wed 23
+	}}
+	m, _ := newTestModel(f)
+	m.weekStart = mon
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 28})
+	m = load(t, m, f)
+
+	// focus first event: Mon Early at 08:00
+	if m.dayIndex != 0 || m.eventIndex != 0 {
+		t.Fatalf("initial %d,%d want 0,0", m.dayIndex, m.eventIndex)
+	}
+	if got := m.focusedHour(); got != 8 {
+		t.Errorf("focusedHour = %d, want 8", got)
+	}
+
+	// j -> Mon Late (20:00)
+	m = upd(t, m, msgKey("j"))
+	if m.dayIndex != 0 || m.eventIndex != 1 || m.focusedHour() != 20 {
+		t.Fatalf("after j: %d,%d hour=%d want 0,1 hour=20", m.dayIndex, m.eventIndex, m.focusedHour())
+	}
+
+	// j -> Wed Night (23:00) (Mon has no more events -> next day with events)
+	m = upd(t, m, msgKey("j"))
+	if m.dayIndex != 2 || m.eventIndex != 0 || m.focusedHour() != 23 {
+		t.Fatalf("after jj: %d,%d hour=%d want 2,0 hour=23", m.dayIndex, m.eventIndex, m.focusedHour())
 	}
 }

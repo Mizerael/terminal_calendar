@@ -37,13 +37,17 @@ is stored in `token.json` (git-ignored) so you only authenticate once.
 
 ## Usage
 
-The main view shows a **week** (Monday → Sunday) with events listed under each
-day. Move across the week and open events for full detail.
+The main view is a **Google-Calendar-style week grid**: seven day columns
+(Monday → Sunday) with an hour gutter on the left. Events occupy their hour
+spans in each column; all-day events sit in a banner above the grid; overlapping
+events show a `Nx` clash marker. The grid scrolls vertically through the day's
+hours (starting at 06:00) and the popup shows the full event details.
 
 | Key        | Action                    |
 |------------|---------------------------|
 | `j`/`k`, `↑`/`↓` | move between events |
 | `h`/`l`, `←`/`→` | move between days (lands near the same time-of-day) |
+| `ctrl+u` / `ctrl+d` | scroll the hour rows up / down |
 | `[` / `]`  | previous / next week      |
 | `t`        | jump to the current week  |
 | `enter`    | open event detail (modal popup; `esc`/`enter` closes, `e` edit, `d` delete) |
@@ -51,7 +55,7 @@ day. Move across the week and open events for full detail.
 | `n`        | new event (start date pre-filled with the focused day) |
 | `d`        | delete event (confirm)    |
 | `r`        | refresh                   |
-| `g`/`G`    | top / bottom of the week  |
+| `g`/`G`    | first / last event of the week |
 | `?`        | help                      |
 | `q`/`ctrl+c` | quit                    |
 

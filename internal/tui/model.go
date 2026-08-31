@@ -52,6 +52,12 @@ type Model struct {
 	dayIndex int
 	// eventIndex is the focused event within the focused day; -1 means none.
 	eventIndex int
+	// cursorHour is the hour row highlighted in the grid when the focused day
+	// has no event (or the selected event's start maps to it otherwise).
+	cursorHour int
+	// scrollHour is the first hour shown at the top of the grid's scrolling
+	// window (0..23). The visible window is [scrollHour, scrollHour+rows).
+	scrollHour int
 
 	loading  bool
 	loaded   bool
@@ -74,10 +80,12 @@ type Model struct {
 
 func New(client eventAPI) (*Model, error) {
 	m := &Model{
-		client:    client,
-		ctx:       context.Background(),
-		weekStart: mondayOf(today()),
-		form:      newForm(),
+		client:     client,
+		ctx:        context.Background(),
+		weekStart:  mondayOf(today()),
+		form:       newForm(),
+		cursorHour: time.Now().Hour(),
+		scrollHour: defaultScrollHour,
 	}
 	m.reload()
 	return m, nil
@@ -261,6 +269,52 @@ func (m *Model) firstEventIndex() (int, int) {
 	return -1, -1
 }
 
+// focusedHour returns the hour row (0..23) the grid should highlight for the
+// focused day: the start hour of the focused event when one is selected,
+// otherwise the last-known cursor hour.
+func (m *Model) focusedHour() int {
+	if ev := m.focusedEvent(); ev != nil {
+		if t, err := ev.StartTime(); err == nil && !t.IsZero() {
+			return t.Hour()
+		}
+	}
+	return m.cursorHour
+}
+
+// scrollDefaults positions the hour window so the highlighted hour is visible,
+// keeping scrollHour within 0..23 for a window of the given number of rows.
+// It does not change scrollHour unless the highlight is outside the window.
+func (m *Model) ensureVisible(rows int) {
+	if rows < 1 {
+		return
+	}
+	h := m.focusedHour()
+	if m.scrollHour <= h && h < m.scrollHour+rows {
+		return
+	}
+	if h < m.scrollHour {
+		m.scrollHour = h
+	} else {
+		m.scrollHour = h - rows + 1
+	}
+	clampHour(&m.scrollHour)
+}
+
+// setCursorHour updates the free (no-event) highlight hour and keeps it valid.
+func (m *Model) setCursorHour(h int) {
+	m.cursorHour = h
+	clampHour(&m.cursorHour)
+}
+
+func clampHour(p *int) {
+	if *p < 0 {
+		*p = 0
+	}
+	if *p > 23 {
+		*p = 23
+	}
+}
+
 // cursorDayBefore finds the event position immediately before the current
 // focus across the week (for j/up navigation). Returns false if there is none.
 func (m *Model) moveUp() bool {
@@ -368,25 +422,44 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "up", "k":
 		m.moveUp()
+		m.ensureVisible(m.effectiveRows())
 	case "down", "j":
 		m.moveDown()
+		m.ensureVisible(m.effectiveRows())
 	case "g", "home":
 		if d, i := m.firstEventIndex(); d >= 0 {
 			m.dayIndex, m.eventIndex = d, i
+			m.ensureVisible(m.effectiveRows())
 		}
 	case "G", "end":
 		for d := 6; d >= 0; d-- {
 			if len(m.weekEvents[d]) > 0 {
 				m.dayIndex = d
 				m.eventIndex = len(m.weekEvents[d]) - 1
+				m.ensureVisible(m.effectiveRows())
 				break
 			}
 		}
 
 	case "left", "h":
 		m.moveToDay(-1)
+		m.ensureVisible(m.effectiveRows())
 	case "right", "l":
 		m.moveToDay(1)
+		m.ensureVisible(m.effectiveRows())
+	case "ctrl+u", "pgup":
+		m.scrollHour -= 6
+		clampHour(&m.scrollHour)
+		m.setCursorHour(m.scrollHour)
+	case "ctrl+d", "pgdown":
+		m.scrollHour += 6
+		clampHour(&m.scrollHour)
+		rows := m.effectiveRows()
+		if m.scrollHour > 24-rows {
+			m.scrollHour = 24 - rows
+		}
+		clampHour(&m.scrollHour)
+		m.setCursorHour(m.scrollHour)
 	case "[":
 		m.weekStart = m.weekStart.AddDate(0, 0, -7)
 		m.resetWeek()
@@ -570,6 +643,7 @@ func (m *Model) renderHelp() string {
 	lines := []struct{ key, desc string }{
 		{"j/k, ↑/↓", "move between events"},
 		{"h/l, ←/→", "move between days"},
+		{"ctrl+u/ctrl+d", "scroll hour rows"},
 		{"[/]", "previous / next week"},
 		{"t", "jump to this week"},
 		{"enter", "open event detail"},
@@ -577,7 +651,7 @@ func (m *Model) renderHelp() string {
 		{"n", "new event"},
 		{"d", "delete event"},
 		{"r", "refresh"},
-		{"g/G", "top / bottom"},
+		{"g/G", "first / last event"},
 		{"?, esc", "close help"},
 		{"q, ctrl+c", "quit"},
 	}
@@ -588,18 +662,6 @@ func (m *Model) renderHelp() string {
 		b.WriteString("\n")
 	}
 	return helpBox.Render(b.String())
-}
-
-// eventTimeLine returns a human label for event start.
-func eventTimeLine(e *gcal.Event) string {
-	if e.AllDay() {
-		return "all day"
-	}
-	t, err := e.StartTime()
-	if err != nil {
-		return "??:??"
-	}
-	return t.Format("15:04")
 }
 
 // overlay centers `popup` on top of `base` and blanks/dims the surroundings.
