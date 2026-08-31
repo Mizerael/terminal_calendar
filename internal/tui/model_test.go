@@ -145,7 +145,7 @@ func run(t *testing.T, m *Model, msg tea.Msg) *Model {
 
 func TestLoadGroupsEventsByDay(t *testing.T) {
 	// 2026-08-31 is a Monday.
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		makeEvent("Mon morning", "a", 9, 0),
 		makeEvent("Mon afternoon", "b", 14, 0),
@@ -171,7 +171,7 @@ func TestLoadGroupsEventsByDay(t *testing.T) {
 }
 
 func TestKeyNavMovesAcrossDays(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		makeEvent("A", "a", 9, 0),              // Mon
 		makeEvent("B", "b", 11, 0),             // Mon
@@ -212,7 +212,7 @@ func TestKeyNavMovesAcrossDays(t *testing.T) {
 }
 
 func TestDayNavigationLandsNearTime(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		makeEvent("A", "a", 9, 0),              // Mon 09:00
 		makeEvent("B", "b", 14, 0),             // Mon 14:00
@@ -243,7 +243,7 @@ func TestDayNavigationLandsNearTime(t *testing.T) {
 }
 
 func TestWeekNavigation(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local) // a Monday
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC) // a Monday
 	f := &fakeAPI{}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -267,7 +267,7 @@ func TestWeekNavigation(t *testing.T) {
 }
 
 func TestModalPopupFlow(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{makeEvent("Detail target", "x", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -295,7 +295,7 @@ func TestModalPopupFlow(t *testing.T) {
 }
 
 func TestPopupEditAndDelete(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{makeEvent("Pop", "1", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -361,7 +361,7 @@ func TestCreateEventFromForm(t *testing.T) {
 }
 
 func TestNewEventPrefillsFocusedDay(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -434,7 +434,7 @@ func TestFormValidationEndBeforeStart(t *testing.T) {
 }
 
 func TestEditEventPrefillsForm(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	berlin, _ := time.LoadLocation("Europe/Berlin")
 	start := time.Date(2026, 8, 31, 9, 0, 0, 0, berlin)
 	f := &fakeAPI{events: []domain.Event{{
@@ -473,7 +473,7 @@ func TestEditEventPrefillsForm(t *testing.T) {
 }
 
 func TestDeleteFlow(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{makeEvent("doomed", "abc", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -493,7 +493,7 @@ func TestDeleteFlow(t *testing.T) {
 }
 
 func TestDeleteCancel(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{makeEvent("survivor", "abc", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -536,7 +536,7 @@ func TestMondayOf(t *testing.T) {
 // TestGridRender checks the grid lays out hour spans and clash markers, and
 // prints the rendered output for visual inspection.
 func TestGridRender(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	// events: Mon 09-10 "Standup", Mon 09:30-11 "Deep", Tue all-day "Holiday",
 	// Wed 14-16 "Workshop"
 	f := &fakeAPI{events: []domain.Event{
@@ -572,7 +572,7 @@ func TestGridRender(t *testing.T) {
 // recurring series, e.g. 09:00-09:30) is actually drawn in the grid rather
 // than vanishing as a zero-length block.
 func TestGridRenderShortEvent(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		eventAt("Quick sync", "a", "2026-08-31T09:00:00Z", "2026-08-31T09:30:00Z"),
 	}}
@@ -591,7 +591,7 @@ func TestGridRenderShortEvent(t *testing.T) {
 // TestWeekRendersSmoke ensures View() does not panic for the week and popup
 // states (catching layout bugs) and produces non-empty output.
 func TestWeekRendersSmoke(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		makeEvent("A", "a", 9, 0),
 		makeEvent("B", "b", 14, 0),
@@ -711,7 +711,7 @@ func TestEmptyCellCursorRequiresSelection(t *testing.T) {
 // TestFocusedEventMarker ensures the selected event gets a distinct ▸ marker
 // in the grid so the selection is obvious in a merged view.
 func TestFocusedEventMarker(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		makeEvent("Standup", "a", 9, 0),
 		makeEvent("Other", "b", 14, 0),
@@ -775,7 +775,9 @@ func TestWindowResizeFillsTerminal(t *testing.T) {
 }
 
 func TestResizeKeepsFocusVisible(t *testing.T) {
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	m, _ := newTestModel(&fakeAPI{events: []domain.Event{makeEvent("late", "a", 22, 0)}})
+	m.weekStart = mon
 	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 60})
 	m = load(t, m, &fakeAPI{events: []domain.Event{makeEvent("late", "a", 22, 0)}})
 	m.dayIndex, m.eventIndex = 0, 0
@@ -830,7 +832,7 @@ func TestEnsureVisible(t *testing.T) {
 }
 
 func TestGridNavigationByEvent(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		makeEvent("Early", "a", 8, 0), // Mon 08
 		makeEvent("Late", "b", 20, 0), // Mon 20
@@ -866,7 +868,7 @@ func TestGridNavigationByEvent(t *testing.T) {
 // sizes and ensures it never panics nor produces content wider than the
 // available width.
 func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{events: []domain.Event{
 		makeEvent("Standup morning", "a", 9, 0),
 		makeEvent("Afternoon review", "b", 14, 0),

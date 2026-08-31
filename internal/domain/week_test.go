@@ -42,6 +42,32 @@ func TestDayIndex(t *testing.T) {
 	}
 }
 
+// TestDayIndexIndependentOfOffset ensures the same instant expressed in a
+// different offset zone maps to the same calendar day, so day-grouping does
+// not shift when the gateway returns events carrying arbitrary timezones.
+func TestDayIndexIndependentOfOffset(t *testing.T) {
+	// 2026-08-31 is the reference Monday.
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+
+	// Same instant, two representations: 2026-09-02 23:00 +04:00 == 19:00Z.
+	insWithOffset := time.Date(2026, 9, 2, 23, 0, 0, 0, time.FixedZone("+04", 4*3600))
+	insUTC := insWithOffset.UTC()
+	if !insWithOffset.Equal(insUTC) {
+		t.Fatalf("test precondition: instants should be equal")
+	}
+
+	withOffset := Event{Start: insWithOffset}
+	asUTC := Event{Start: insUTC}
+
+	want := 2 // Wednesday
+	if got := DayIndex(&withOffset, mon); got != want {
+		t.Errorf("DayIndex(+04:00) = %d, want %d", got, want)
+	}
+	if got := DayIndex(&asUTC, mon); got != want {
+		t.Errorf("DayIndex(UTC) = %d, want %d", got, want)
+	}
+}
+
 func TestHourRange(t *testing.T) {
 	// timed event 09:00-11:00
 	e := Event{Start: time.Date(2026, 8, 31, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 8, 31, 11, 0, 0, 0, time.UTC)}

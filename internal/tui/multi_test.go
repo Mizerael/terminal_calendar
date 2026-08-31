@@ -34,7 +34,7 @@ func loadCalendars(t *testing.T, m *Model, f *fakeAPI) *Model {
 }
 
 func TestMergedLoadAcrossEnabledCalendars(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{
 		calendars: []domain.Calendar{
 			{ID: "work", Summary: "Work", Primary: true},

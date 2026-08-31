@@ -30,13 +30,17 @@ func ClampHour(p *int) {
 }
 
 // DayIndex maps an event to its day index (0=Monday) within the week that
-// starts at weekStart, or -1 if the event falls outside that week.
+// starts at weekStart, or -1 if the event falls outside that week. Both sides
+// are evaluated in weekStart's zone so an offset-carrying event maps to a
+// consistent calendar day regardless of the timezone it was stored in.
 func DayIndex(e *Event, weekStart time.Time) int {
 	start := e.StartTime()
 	if start.IsZero() {
 		return -1
 	}
-	diff := int(StartOfDay(start).Sub(StartOfDay(weekStart)).Hours()) / 24
+	refWeek := StartOfDay(weekStart)
+	startDay := StartOfDay(start.In(weekStart.Location()))
+	diff := int(startDay.Sub(refWeek).Hours()) / 24
 	if diff < 0 || diff > 6 {
 		return -1
 	}
