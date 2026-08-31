@@ -11,69 +11,77 @@ import (
 
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
+
+	"github.com/Mizerael/terminal_calendar/internal/domain"
 )
 
-func TestParseTimeVariants(t *testing.T) {
+func TestFromAPIEventParsesVariants(t *testing.T) {
 	cases := []struct {
-		name  string
-		start *EDT
-		end   *EDT
-		want  string // expected local layout "2006-01-02 15:04"
+		name   string
+		api    *calendar.Event
+		want   string // expected local layout "2006-01-02 15:04"
+		allday bool
+		tz     string
 	}{
 		{
-			name:  "dateTime",
-			start: &EDT{DateTime: "2026-08-30T09:15:00+02:00"},
-			want:  "2026-08-30 09:15",
+			name: "dateTime",
+			api:  &calendar.Event{Start: &calendar.EventDateTime{DateTime: "2026-08-30T09:15:00+02:00"}},
+			want: "2026-08-30 09:15",
 		},
 		{
-			name:  "all-day",
-			start: &EDT{Date: "2026-08-30"},
-			want:  "2026-08-30 00:00",
+			name:   "all-day",
+			api:    &calendar.Event{Start: &calendar.EventDateTime{Date: "2026-08-30"}},
+			want:   "2026-08-30 00:00",
+			allday: true,
 		},
 		{
-			name:  "empty start falls back to end",
-			start: &EDT{},
-			end:   &EDT{DateTime: "2026-08-30T10:00:00Z"},
-			want:  "2026-08-30 10:00",
+			name: "timezone kept",
+			api:  &calendar.Event{Start: &calendar.EventDateTime{DateTime: "2026-08-30T09:00:00Z", TimeZone: "Europe/Berlin"}},
+			want: "2026-08-30 09:00",
+			tz:   "Europe/Berlin",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ev := &Event{Start: c.start, End: c.end}
-			got, err := ev.StartTime()
-			if err != nil {
-				t.Fatalf("StartTime: %v", err)
+			ev := fromAPIEvent(c.api)
+			if ev == nil {
+				t.Fatal("fromAPIEvent returned nil")
 			}
-			if got.Format("2006-01-02 15:04") != c.want {
-				t.Errorf("got %v, want %s", got, c.want)
+			if got := ev.StartTime().Format("2006-01-02 15:04"); got != c.want {
+				t.Errorf("start = %q, want %q", got, c.want)
+			}
+			if ev.AllDay != c.allday {
+				t.Errorf("allday = %v, want %v", ev.AllDay, c.allday)
+			}
+			if ev.Timezone() != c.tz {
+				t.Errorf("tz = %q, want %q", ev.Timezone(), c.tz)
 			}
 		})
 	}
 }
 
-func TestAllDayFlag(t *testing.T) {
-	timed := &Event{Start: &EDT{DateTime: "2026-08-30T09:00:00Z"}}
-	if timed.AllDay() {
-		t.Fatal("timed event must not be all-day")
+func TestToAPIEvent(t *testing.T) {
+	tz, _ := time.LoadLocation("Europe/Berlin")
+	start := time.Date(2026, 8, 30, 9, 0, 0, 0, tz)
+	allDay := &domain.Event{
+		AllDay:   true,
+		Start:    time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC),
+		TimeZone: "Europe/Berlin",
 	}
-	aday := &Event{Start: &EDT{Date: "2026-08-30"}}
-	if !aday.AllDay() {
-		t.Fatal("date-only event must be all-day")
+	if a := toAPIEvent(allDay); a.Start.Date != "2026-08-30" || a.Start.Date == "" && a.Start.DateTime != "" {
+		t.Errorf("all-day mapping wrong: %+v", a.Start)
 	}
-	none := &Event{}
-	if none.AllDay() {
-		t.Fatal("event without start must not be all-day")
+	timed := &domain.Event{Start: start, End: start.Add(time.Hour), TimeZone: "Europe/Berlin"}
+	if a := toAPIEvent(timed); a.Start.DateTime != "2026-08-30T09:00:00" || a.Start.TimeZone != "Europe/Berlin" {
+		t.Errorf("timed mapping wrong: %+v", a.Start)
 	}
-}
 
-func TestTimezone(t *testing.T) {
-	ev := &Event{Start: &EDT{DateTime: "2026-08-30T09:00:00Z"}}
-	if got := ev.Timezone(); got != "" {
-		t.Errorf("tz without explicit zone = %q, want empty", got)
-	}
-	ev = &Event{Start: &EDT{DateTime: "2026-08-30T09:00:00Z", TimeZone: "Europe/Berlin"}}
-	if ev.Timezone() != "Europe/Berlin" {
-		t.Errorf("tz = %q, want Europe/Berlin", ev.Timezone())
+	// Round-trip a timed event.
+	if ev := fromAPIEvent(toAPIEvent(timed)); ev == nil {
+		t.Fatal("round-trip returned nil")
+	} else if !ev.StartTime().Equal(start) {
+		t.Errorf("round-trip start = %v, want %v", ev.StartTime(), start)
 	}
 }
 
