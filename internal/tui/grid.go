@@ -272,9 +272,9 @@ func (m *Model) renderHourCell(d, hour int, covering map[int][]*span, now time.T
 	if cont {
 		// continuation of a block that started earlier
 		if isCursor {
-			return gridEventCont.Copy().Background(lipgloss.Color("24")).Width(colW).Render("")
+			return gridEventCont.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render("")
 		}
-		return gridEventCont.Copy().Width(colW).Render("")
+		return gridEventCont.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render("")
 	}
 
 	text := top.ev.Summary
@@ -288,9 +288,9 @@ func (m *Model) renderHourCell(d, hour int, covering map[int][]*span, now time.T
 	full = truncate(full, colW)
 
 	if isCursor {
-		return gridEventTop.Copy().Background(lipgloss.Color("24")).Width(colW).Render(full)
+		return gridEventTop.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render(full)
 	}
-	return gridEventTop.Copy().Width(colW).Render(full)
+	return gridEventTop.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render(full)
 }
 
 func (m *Model) renderEmptyCell(isCursor, isWeekend, isNow bool, colW int) string {
@@ -310,6 +310,26 @@ func (m *Model) renderEmptyCell(isCursor, isWeekend, isNow bool, colW int) strin
 
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+// calendarPalette is a set of pleasant ANSI-256 background colors, one per
+// calendar. Events are colored by their owning calendar so a merged view
+// remains visually distinguishable.
+var calendarPalette = []string{
+	"24", "28", "52", "58", "90", "94", "23", "30", "25", "29",
+}
+
+// calendarColor returns a stable ANSI-256 color for a calendar id.
+func calendarColor(id string) string {
+	if id == "" {
+		return "58"
+	}
+	var h uint32 = 2166136261
+	for _, b := range []byte(id) {
+		h ^= uint32(b)
+		h *= 16777619
+	}
+	return calendarPalette[int(h)%len(calendarPalette)]
 }
 
 func truncate(s string, n int) string {

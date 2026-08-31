@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
@@ -47,10 +48,26 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+	model.SetStatePath(statePathDefault())
+	model.SetInitialTarget(*calendarID)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+}
+
+// statePathDefault returns the location of the persisted calendar selection,
+// based on the token cache directory when available.
+func statePathDefault() string {
+	tok := os.Getenv(gcal.EnvToken)
+	if tok == "" {
+		tok = "token.json"
+	}
+	dir := filepath.Dir(tok)
+	if dir == "." || dir == "" {
+		return "calendar_state.json"
+	}
+	return filepath.Join(dir, "calendar_state.json")
 }

@@ -20,7 +20,10 @@ import (
 	"google.golang.org/api/option"
 )
 
-// Event is the subset of a calendar event the UI needs.
+// Event is the subset of a calendar event the UI needs. CalendarID and
+// CalendarSummary identify which calendar the event belongs to and are filled
+// in by the query that returned it, so a merged multi-calendar view can color
+// and route events.
 type Event struct {
 	Id               string `json:"id,omitempty"`
 	Etag             string `json:"etag,omitempty"`
@@ -30,6 +33,17 @@ type Event struct {
 	RecurringEventId string `json:"recurringEventId,omitempty"`
 	Start            *EDT   `json:"start,omitempty"`
 	End              *EDT   `json:"end,omitempty"`
+
+	CalendarID      string `json:"calendarId,omitempty"`
+	CalendarSummary string `json:"calendarSummary,omitempty"`
+}
+
+// Calendar is the subset of a Google Calendar (CalendarList entry) the UI uses
+// to list, enable and target calendars.
+type Calendar struct {
+	ID      string
+	Summary string
+	Primary bool
 }
 
 // EDT mirrors the calendar API's EventDateTime.
@@ -302,10 +316,44 @@ func (c *Client) ListEvents(ctx context.Context, day time.Time) ([]Event, error)
 	return c.ListEventsRange(ctx, start, start.Add(24*time.Hour))
 }
 
-// ListEventsRange returns all events overlapping [start, end), ordered by
-// start time. A single API call covers an arbitrary range (e.g. a whole week).
+// ListCalendars returns the calendars the user can see, in the API's default
+// (typically summary) order.
+func (c *Client) ListCalendars(ctx context.Context) ([]Calendar, error) {
+	res, err := c.svc.CalendarList.List().Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Calendar, 0, len(res.Items))
+	for _, item := range res.Items {
+		if item == nil {
+			continue
+		}
+		out = append(out, Calendar{
+			ID:      item.Id,
+			Summary: item.Summary,
+			Primary: item.Primary,
+		})
+	}
+	return out, nil
+}
+
+// ListEventsRange returns all events overlapping [start, end) from the
+// client's configured calendar, ordered by start time. A single API call
+// covers an arbitrary range (e.g. a whole week).
 func (c *Client) ListEventsRange(ctx context.Context, start, end time.Time) ([]Event, error) {
-	evs, err := c.svc.Events.List(c.calID).
+	return c.ListEventsRangeIn(ctx, c.calID, start, end)
+}
+
+// ListEventsRangeIn returns events overlapping [start, end) from the given
+// calendar, tagging each returned event with that calendar's id and summary.
+func (c *Client) ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]Event, error) {
+	return c.listEventsIn(ctx, calID, calID, start, end)
+}
+
+// listEventsIn is the shared implementation: it queries events and attaches
+// the owning calendar's id/summary to each result.
+func (c *Client) listEventsIn(ctx context.Context, calID, summary string, start, end time.Time) ([]Event, error) {
+	evs, err := c.svc.Events.List(calID).
 		TimeMin(start.Format(time.RFC3339)).
 		TimeMax(end.Format(time.RFC3339)).
 		SingleEvents(true).
@@ -319,6 +367,8 @@ func (c *Client) ListEventsRange(ctx context.Context, start, end time.Time) ([]E
 	for _, e := range evs.Items {
 		ev := fromAPIEvent(e)
 		if ev != nil {
+			ev.CalendarID = calID
+			ev.CalendarSummary = summary
 			out = append(out, *ev)
 		}
 	}
@@ -350,32 +400,49 @@ func (c *Client) ListUpcoming(ctx context.Context, days int) ([]Event, error) {
 	return out, nil
 }
 
-// CreateEvent inserts a new event into the calendar.
+// CreateEvent inserts a new event into the client's configured calendar.
 func (c *Client) CreateEvent(ctx context.Context, e *Event) (*Event, error) {
+	return c.CreateEventIn(ctx, c.calID, e)
+}
+
+// CreateEventIn inserts a new event into the given calendar.
+func (c *Client) CreateEventIn(ctx context.Context, calID string, e *Event) (*Event, error) {
 	api := toAPIEvent(e)
-	res, err := c.svc.Events.Insert(c.calID, api).Context(ctx).Do()
+	res, err := c.svc.Events.Insert(calID, api).Context(ctx).Do()
 	if err != nil {
 		return nil, err
 	}
 	return fromAPIEvent(res), nil
 }
 
-// UpdateEvent replaces an existing event identified by e.Id.
+// UpdateEvent replaces an existing event identified by e.Id in the client's
+// configured calendar.
 func (c *Client) UpdateEvent(ctx context.Context, e *Event) (*Event, error) {
+	return c.UpdateEventIn(ctx, c.calID, e)
+}
+
+// UpdateEventIn replaces an existing event identified by e.Id in the given
+// calendar.
+func (c *Client) UpdateEventIn(ctx context.Context, calID string, e *Event) (*Event, error) {
 	if e.Id == "" {
 		return nil, errors.New("event has no id")
 	}
 	api := toAPIEvent(e)
-	res, err := c.svc.Events.Update(c.calID, e.Id, api).Context(ctx).Do()
+	res, err := c.svc.Events.Update(calID, e.Id, api).Context(ctx).Do()
 	if err != nil {
 		return nil, err
 	}
 	return fromAPIEvent(res), nil
 }
 
-// DeleteEvent removes an event by id.
+// DeleteEvent removes an event by id from the client's configured calendar.
 func (c *Client) DeleteEvent(ctx context.Context, id string) error {
-	return c.svc.Events.Delete(c.calID, id).Context(ctx).Do()
+	return c.DeleteEventIn(ctx, c.calID, id)
+}
+
+// DeleteEventIn removes an event by id from the given calendar.
+func (c *Client) DeleteEventIn(ctx context.Context, calID, id string) error {
+	return c.svc.Events.Delete(calID, id).Context(ctx).Do()
 }
 
 // StartTime returns the event start as a time.Time, falling back to the

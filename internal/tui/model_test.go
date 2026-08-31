@@ -15,28 +15,52 @@ import (
 
 // fakeAPI is a configurable stub backing the TUI.
 type fakeAPI struct {
-	events  []gcal.Event
-	listErr error
-	created []*gcal.Event
-	updated []*gcal.Event
-	deleted []string
+	calendars []gcal.Calendar
+	// events is the flat fallback list used when mapEvents is empty.
+	events    []gcal.Event
+	mapEvents map[string][]gcal.Event
+	listErr   error
+	created   []*gcal.Event
+	updated   []*gcal.Event
+	deleted   []string
 }
 
-func (f *fakeAPI) ListEventsRange(ctx context.Context, start, end time.Time) ([]gcal.Event, error) {
+func (f *fakeAPI) ListCalendars(ctx context.Context) ([]gcal.Calendar, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	return f.events, nil
+	return f.calendars, nil
 }
-func (f *fakeAPI) CreateEvent(ctx context.Context, e *gcal.Event) (*gcal.Event, error) {
+
+func (f *fakeAPI) ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]gcal.Event, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var src []gcal.Event
+	if f.mapEvents != nil {
+		src = f.mapEvents[calID]
+	} else {
+		src = f.events
+	}
+	out := make([]gcal.Event, len(src))
+	for i, e := range src {
+		e.CalendarID = calID
+		if e.CalendarSummary == "" {
+			e.CalendarSummary = calID
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+func (f *fakeAPI) CreateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error) {
 	f.created = append(f.created, e)
 	return e, nil
 }
-func (f *fakeAPI) UpdateEvent(ctx context.Context, e *gcal.Event) (*gcal.Event, error) {
+func (f *fakeAPI) UpdateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error) {
 	f.updated = append(f.updated, e)
 	return e, nil
 }
-func (f *fakeAPI) DeleteEvent(ctx context.Context, id string) error {
+func (f *fakeAPI) DeleteEventIn(ctx context.Context, calID, id string) error {
 	f.deleted = append(f.deleted, id)
 	return nil
 }

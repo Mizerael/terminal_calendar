@@ -63,6 +63,20 @@ var (
 	confirmBox = lipgloss.NewStyle().
 			Padding(1)
 
+	pickerTitle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("205"))
+
+	pickerRow = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("251"))
+
+	pickerCursor = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("205"))
+
+	pickerHint = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("239"))
+
 	helpKey = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("205")).
 		Width(15).

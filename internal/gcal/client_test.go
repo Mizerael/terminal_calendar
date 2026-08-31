@@ -215,3 +215,57 @@ func TestListEventsRange(t *testing.T) {
 		t.Errorf("timeMax = %q", gotMax)
 	}
 }
+
+func TestListCalendars(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"items":[
+			{"id":"c1","summary":"Work","primary":true},
+			{"id":"c2","summary":"Personal"}
+		]}`)
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{svc: svc, calID: "primary"}
+
+	cals, err := c.ListCalendars(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cals) != 2 {
+		t.Fatalf("got %d calendars, want 2", len(cals))
+	}
+	if cals[0].ID != "c1" || !cals[0].Primary || cals[0].Summary != "Work" {
+		t.Errorf("unexpected first calendar: %+v", cals[0])
+	}
+	if cals[1].ID != "c2" || cals[1].Primary {
+		t.Errorf("unexpected second calendar: %+v", cals[1])
+	}
+}
+
+func TestListEventsRangeInTagsCalendar(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"items":[{"id":"e1","summary":"Standup","start":{"dateTime":"2026-08-31T09:00:00Z"},"end":{"dateTime":"2026-08-31T09:30:00Z"}}]}`)
+	}))
+	defer srv.Close()
+
+	svc, _ := calendar.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	c := &Client{svc: svc, calID: "primary"}
+
+	start := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	evs, err := c.ListEventsRangeIn(context.Background(), "personal", start, start.Add(7*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("got %d events, want 1", len(evs))
+	}
+	if evs[0].CalendarID != "personal" || evs[0].CalendarSummary != "personal" {
+		t.Errorf("event not tagged with calendar: %+v", evs[0])
+	}
+}

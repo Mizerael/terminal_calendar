@@ -26,16 +26,23 @@ type msgEventsLoaded struct {
 	weekStart time.Time
 }
 
+// msgCalendarsLoaded signals that the user's calendar list has been fetched
+// and the model should now load events for the enabled calendars.
+type msgCalendarsLoaded struct {
+	weekStart time.Time
+}
+
 type msgError struct{ err error }
 type msgSaved struct{}
 type msgDeleted struct{}
 
 // eventAPI is the subset of the calendar API the TUI needs.
 type eventAPI interface {
-	ListEventsRange(ctx context.Context, start, end time.Time) ([]gcal.Event, error)
-	CreateEvent(ctx context.Context, e *gcal.Event) (*gcal.Event, error)
-	UpdateEvent(ctx context.Context, e *gcal.Event) (*gcal.Event, error)
-	DeleteEvent(ctx context.Context, id string) error
+	ListCalendars(ctx context.Context) ([]gcal.Calendar, error)
+	ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]gcal.Event, error)
+	CreateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error)
+	UpdateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error)
+	DeleteEventIn(ctx context.Context, calID, id string) error
 }
 
 // Model is the root bubbletea model.
@@ -76,6 +83,18 @@ type Model struct {
 	width      int
 	height     int
 	quitting   bool
+
+	// Multi-calendar state. calendars holds the user's calendars; isEnabled
+	// selects which are loaded and shown merged; targetCalID is the calendar
+	// new events are created into.
+	calendars   []gcal.Calendar
+	isEnabled   map[string]bool
+	targetCalID string
+	statePath   string
+	// picker is the calendar visibility/target overlay.
+	picker      bool
+	pickerIndex int
+	pickerErr   error
 }
 
 func New(client eventAPI) (*Model, error) {
@@ -86,7 +105,9 @@ func New(client eventAPI) (*Model, error) {
 		form:       newForm(),
 		cursorHour: time.Now().Hour(),
 		scrollHour: defaultScrollHour,
+		isEnabled:  map[string]bool{},
 	}
+	m.loadState()
 	m.reload()
 	return m, nil
 }
@@ -112,12 +133,31 @@ func (m *Model) reload() tea.Cmd {
 }
 
 func (m *Model) loadEvents() tea.Msg {
-	start := m.weekStart
-	events, err := m.client.ListEventsRange(m.ctx, start, start.Add(7*24*time.Hour))
+	calendars, err := m.client.ListCalendars(m.ctx)
 	if err != nil {
 		return msgError{err: err}
 	}
-	return msgEventsLoaded{events: events, weekStart: start}
+	m.calendars = calendars
+	return msgCalendarsLoaded{weekStart: m.weekStart}
+}
+
+// loadWeekEvents fetches events for every enabled calendar and merges them
+// into a single flat week-long list.
+func (m *Model) loadWeekEvents() tea.Msg {
+	start := m.weekStart
+	end := start.Add(7 * 24 * time.Hour)
+	var all []gcal.Event
+	for _, cal := range m.calendars {
+		if !m.isEnabled[cal.ID] {
+			continue
+		}
+		items, err := m.client.ListEventsRangeIn(m.ctx, cal.ID, start, end)
+		if err != nil {
+			return msgError{err: err}
+		}
+		all = append(all, items...)
+	}
+	return msgEventsLoaded{events: all, weekStart: start}
 }
 
 // focusedDay returns the time.Time midnight for the focused day.
@@ -163,11 +203,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateForm(msg)
 		case m.screen == screenConfirm:
 			return m.updateConfirm(msg)
+		case m.picker:
+			return m.updatePicker(msg)
 		case m.popup:
 			return m.updatePopup(msg)
 		default:
 			return m.updateList(msg)
 		}
+
+	case msgCalendarsLoaded:
+		m.applyDefaultCalendarSelection()
+		m.saveState()
+		return m, m.loadWeekEvents
 
 	case msgEventsLoaded:
 		m.loading = false
@@ -499,6 +546,10 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r":
 		return m, m.reload()
+	case "c":
+		m.picker = true
+		m.pickerIndex = 0
+		m.pickerErr = nil
 	case "?":
 		m.help = !m.help
 	}
@@ -534,10 +585,14 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "y", "enter":
 		id := m.confirm.Id
+		calID := m.confirm.CalendarID
+		if calID == "" {
+			calID = m.targetCalID
+		}
 		m.confirm = nil
 		m.screen = screenList
 		return m, func() tea.Msg {
-			if err := m.client.DeleteEvent(m.ctx, id); err != nil {
+			if err := m.client.DeleteEventIn(m.ctx, calID, id); err != nil {
 				return msgError{err: err}
 			}
 			return msgDeleted{}
@@ -591,9 +646,13 @@ func (m *Model) saveEvent(ev *gcal.Event, create bool) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		if create {
-			_, err = m.client.CreateEvent(ctx, ev)
+			_, err = m.client.CreateEventIn(ctx, m.targetCalID, ev)
 		} else {
-			_, err = m.client.UpdateEvent(ctx, ev)
+			calID := ev.CalendarID
+			if calID == "" {
+				calID = m.targetCalID
+			}
+			_, err = m.client.UpdateEventIn(ctx, calID, ev)
 		}
 		if err != nil {
 			return msgError{err: err}
@@ -615,7 +674,10 @@ func (m *Model) View() string {
 		return m.renderConfirm()
 	default:
 		v := m.renderList()
-		if m.popup && m.popupEvent != nil {
+		switch {
+		case m.picker:
+			v = m.renderPicker()
+		case m.popup && m.popupEvent != nil:
 			v = overlay(v, m.renderPopup(m.popupEvent), m.width, m.height)
 		}
 		if m.help {
@@ -655,6 +717,7 @@ func (m *Model) renderHelp() string {
 		{"d", "delete event"},
 		{"r", "refresh"},
 		{"g/G", "first / last event"},
+		{"c", "calendars (show/hide # target)"},
 		{"?, esc", "close help"},
 		{"q, ctrl+c", "quit"},
 	}

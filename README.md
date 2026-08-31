@@ -11,6 +11,9 @@ A bubbletea TUI for working with Google Calendar events from the terminal.
 - Create, edit and delete events
 - Full-day and timed events (auto-detected via `Start date`/`Start time`)
 - OAuth2 login with the browser flow and token caching
+- **Multi-calendar**: events from all enabled calendars shown merged and color-coded;
+  a calendar picker (`c`) toggles which calendars are shown and picks the
+  create-target; the selection persists between runs
 
 ## Setup
 
@@ -56,11 +59,14 @@ hours (starting at 06:00) and the popup shows the full event details.
 | `d`        | delete event (confirm)    |
 | `r`        | refresh                   |
 | `g`/`G`    | first / last event of the week |
+| `c`        | calendar picker: `enter` toggles a calendar on/off, `t` marks the new-event target |
 | `?`        | help                      |
 | `q`/`ctrl+c` | quit                    |
 
 In the event form, leave both *Start time* and *End time* empty to create an
-all-day event.
+all-day event. New events are created in the calendar marked `→` in the picker
+(by default your primary calendar, or `GOOGLE_CALENDAR_ID`); editing/deleting an
+event always acts on the calendar that owns it.
 
 ## Environment variables
 
@@ -68,7 +74,7 @@ all-day event.
 |------------------------|------------------------------|-------------------------|
 | `GOOGLE_CLIENT_ID`     | OAuth client id              | *(required)*            |
 | `GOOGLE_CLIENT_SECRET` | OAuth client secret          | *(required)*            |
-| `GOOGLE_CALENDAR_ID`   | calendar id to use           | `primary`               |
+| `GOOGLE_CALENDAR_ID`   | default new-event target calendar id | `primary`          |
 | `GOOGLE_REDIRECT_URI`  | OAuth redirect URI           | `http://localhost:8765` |
 | `GOOGLE_ACCOUNT`       | pre-select Google account (email); otherwise you are prompted in the terminal | — |
 | `GOOGLE_TOKEN`         | token cache path             | `token.json`            |
