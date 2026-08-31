@@ -20,10 +20,10 @@ const (
 	screenConfirm
 )
 
-// msgEventsLoaded carries the fetched events for a day.
+// msgEventsLoaded carries the fetched events for a week (weekStart = Monday).
 type msgEventsLoaded struct {
-	events []gcal.Event
-	day    time.Time
+	events    []gcal.Event
+	weekStart time.Time
 }
 
 type msgError struct{ err error }
@@ -32,7 +32,7 @@ type msgDeleted struct{}
 
 // eventAPI is the subset of the calendar API the TUI needs.
 type eventAPI interface {
-	ListEvents(ctx context.Context, day time.Time) ([]gcal.Event, error)
+	ListEventsRange(ctx context.Context, start, end time.Time) ([]gcal.Event, error)
 	CreateEvent(ctx context.Context, e *gcal.Event) (*gcal.Event, error)
 	UpdateEvent(ctx context.Context, e *gcal.Event) (*gcal.Event, error)
 	DeleteEvent(ctx context.Context, id string) error
@@ -43,13 +43,24 @@ type Model struct {
 	client eventAPI
 	ctx    context.Context
 
-	day      time.Time
-	events   []gcal.Event
-	cursor   int
+	// weekStart is the Monday (00:00 local) of the displayed week. The week
+	// spans [weekStart, weekStart + 7 days).
+	weekStart time.Time
+	// weekEvents[dayIndex] holds that day's events, sorted by start time.
+	weekEvents [7][]gcal.Event
+	// dayIndex is the focused day within the week (0 = Monday).
+	dayIndex int
+	// eventIndex is the focused event within the focused day; -1 means none.
+	eventIndex int
+
 	loading  bool
 	loaded   bool
 	loadErr  error
 	lastSync time.Time
+
+	// popup is a modal detail overlay for a specific event.
+	popup      bool
+	popupEvent *gcal.Event
 
 	screen     screen
 	form       *form
@@ -63,18 +74,25 @@ type Model struct {
 
 func New(client eventAPI) (*Model, error) {
 	m := &Model{
-		client: client,
-		ctx:    context.Background(),
-		day:    today(),
-		form:   newForm(),
+		client:    client,
+		ctx:       context.Background(),
+		weekStart: mondayOf(today()),
+		form:      newForm(),
 	}
 	m.reload()
 	return m, nil
 }
 
+// today returns midnight (local) today.
 func today() time.Time {
 	now := time.Now()
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+}
+
+// mondayOf returns midnight (local) of the Monday of the week containing day.
+func mondayOf(day time.Time) time.Time {
+	wd := (int(day.Weekday()) + 6) % 7 // Mon=0 … Sun=6
+	return day.AddDate(0, 0, -wd)
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -86,12 +104,39 @@ func (m *Model) reload() tea.Cmd {
 }
 
 func (m *Model) loadEvents() tea.Msg {
-	day := m.day
-	events, err := m.client.ListEvents(m.ctx, day)
+	start := m.weekStart
+	events, err := m.client.ListEventsRange(m.ctx, start, start.Add(7*24*time.Hour))
 	if err != nil {
 		return msgError{err: err}
 	}
-	return msgEventsLoaded{events: events, day: day}
+	return msgEventsLoaded{events: events, weekStart: start}
+}
+
+// focusedDay returns the time.Time midnight for the focused day.
+func (m *Model) focusedDay() time.Time {
+	return m.weekStart.AddDate(0, 0, m.dayIndex)
+}
+
+// focusedEvent returns a pointer to the focused event, or nil.
+func (m *Model) focusedEvent() *gcal.Event {
+	if m.dayIndex < 0 || m.dayIndex > 6 || m.eventIndex < 0 {
+		return nil
+	}
+	day := m.weekEvents[m.dayIndex]
+	if m.eventIndex >= len(day) {
+		return nil
+	}
+	ev := day[m.eventIndex]
+	return &ev
+}
+
+// totalEvents counts events across all days of the week.
+func (m *Model) totalEvents() int {
+	n := 0
+	for _, d := range m.weekEvents {
+		n += len(d)
+	}
+	return n
 }
 
 // ---- updates ----
@@ -102,24 +147,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 
 	case tea.KeyMsg:
-		if m.screen == screenForm {
+		switch {
+		case m.screen == screenForm:
 			return m.updateForm(msg)
-		}
-		if m.screen == screenConfirm {
+		case m.screen == screenConfirm:
 			return m.updateConfirm(msg)
+		case m.popup:
+			return m.updatePopup(msg)
+		default:
+			return m.updateList(msg)
 		}
-		return m.updateList(msg)
 
 	case msgEventsLoaded:
 		m.loading = false
-		if msg.day.Equal(m.day) {
-			m.events = msg.events
+		if msg.weekStart.Equal(m.weekStart) {
+			m.groupEvents(msg.events)
 			m.loaded = true
 			m.loadErr = nil
 			m.lastSync = time.Now()
-			if m.cursor >= len(m.events) {
-				m.cursor = 0
-			}
+			m.clampCursor()
 		}
 
 	case msgError:
@@ -135,7 +181,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgSaved:
 		m.screen = screenList
-		m.form.reset()
+		m.form.reset(time.Time{})
 		return m, m.reload()
 
 	case msgDeleted:
@@ -146,6 +192,174 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// groupEvents buckets a flat week-long list into per-day slices.
+func (m *Model) groupEvents(events []gcal.Event) {
+	var out [7][]gcal.Event
+	for _, e := range events {
+		idx := m.dayIndexForEvent(&e)
+		if idx >= 0 {
+			out[idx] = append(out[idx], e)
+		}
+	}
+	m.weekEvents = out
+}
+
+// dayIndexForEvent maps an event to its day index within the current week.
+func (m *Model) dayIndexForEvent(e *gcal.Event) int {
+	start, err := e.StartTime()
+	if err != nil {
+		return -1
+	}
+	// Normalize to local midnight on the event's own date.
+	dayMid := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	startWeek := mondayOf(dayMid)
+	diff := int(dayMid.Sub(startWeek).Hours()) / 24
+	if diff < 0 || diff > 6 {
+		return -1
+	}
+	return diff
+}
+
+// clampCursor keeps the focused day within range and the event index within
+// the focused day (or -1 if the day has no events).
+func (m *Model) clampCursor() {
+	if m.dayIndex < 0 {
+		m.dayIndex = 0
+	}
+	if m.dayIndex > 6 {
+		m.dayIndex = 6
+	}
+	if m.weekEvents[m.dayIndex] == nil {
+		m.weekEvents[m.dayIndex] = []gcal.Event{}
+	}
+	if m.eventIndex >= len(m.weekEvents[m.dayIndex]) {
+		m.eventIndex = 0
+	}
+	if m.eventIndex < 0 || len(m.weekEvents[m.dayIndex]) == 0 {
+		m.eventIndex = -1
+	}
+}
+
+// forEachEvent yields each event in week order as (dayIndex, eventIndex, *Event).
+// on is invoked only for non-empty days.
+func (m *Model) forEachEvent(on func(dayIdx, evtIdx int, e *gcal.Event)) {
+	for d := 0; d < 7; d++ {
+		for i, e := range m.weekEvents[d] {
+			on(d, i, &e)
+		}
+	}
+}
+
+// firstEventIndex returns the (day, event) of the first event in the week, or
+// (-1,-1) if there are none.
+func (m *Model) firstEventIndex() (int, int) {
+	for d := 0; d < 7; d++ {
+		if len(m.weekEvents[d]) > 0 {
+			return d, 0
+		}
+	}
+	return -1, -1
+}
+
+// cursorDayBefore finds the event position immediately before the current
+// focus across the week (for j/up navigation). Returns false if there is none.
+func (m *Model) moveUp() bool {
+	if m.eventIndex > 0 {
+		m.eventIndex--
+		return true
+	}
+	// move to last event of previous day that has events
+	for d := m.dayIndex - 1; d >= 0; d-- {
+		if len(m.weekEvents[d]) > 0 {
+			m.dayIndex = d
+			m.eventIndex = len(m.weekEvents[d]) - 1
+			return true
+		}
+	}
+	return false
+}
+
+// moveDown moves to the event after the current focus. Returns false at the end.
+func (m *Model) moveDown() bool {
+	day := m.weekEvents[m.dayIndex]
+	if m.eventIndex >= 0 && m.eventIndex < len(day)-1 {
+		m.eventIndex++
+		return true
+	}
+	// move to first event of next day that has events
+	for d := m.dayIndex + 1; d < 7; d++ {
+		if len(m.weekEvents[d]) > 0 {
+			m.dayIndex = d
+			m.eventIndex = 0
+			return true
+		}
+	}
+	return false
+}
+
+// moveToDay shifts the focused day by delta and lands as close as possible to
+// the current focused time-of-day.
+func (m *Model) moveToDay(delta int) {
+	target := m.dayIndex + delta
+	if target < 0 {
+		target = 0
+	}
+	if target > 6 {
+		target = 6
+	}
+	m.dayIndex = target
+
+	want := time.Time{}
+	if ev := m.focusedEvent(); ev != nil {
+		if t, err := ev.StartTime(); err == nil {
+			want = t
+		} else {
+			m.eventIndex = -1
+			return
+		}
+	} else {
+		// no current event: default to now's time-of-day
+		now := time.Now()
+		want = time.Date(2000, 1, 1, now.Hour(), now.Minute(), 0, 0, time.UTC)
+	}
+
+	day := m.weekEvents[target]
+	if len(day) == 0 {
+		m.eventIndex = -1
+		return
+	}
+	// pick the event start closest to `want` (measured as absolute minutes)
+	best := 0
+	bestGap := int64(1 << 60)
+	for i := range day {
+		t, err := day[i].StartTime()
+		if err != nil {
+			continue
+		}
+		gap := abs64(t.Unix() - want.Unix())
+		if gap < bestGap {
+			bestGap = gap
+			best = i
+		}
+	}
+	m.eventIndex = best
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func (m *Model) resetWeek() {
+	m.weekEvents = [7][]gcal.Event{}
+	m.loaded = false
+	m.loadErr = nil
+	m.eventIndex = -1
+	m.loading = true
+}
+
 func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -153,44 +367,57 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.moveUp()
 	case "down", "j":
-		if m.cursor < len(m.events)-1 {
-			m.cursor++
-		}
+		m.moveDown()
 	case "g", "home":
-		m.cursor = 0
+		if d, i := m.firstEventIndex(); d >= 0 {
+			m.dayIndex, m.eventIndex = d, i
+		}
 	case "G", "end":
-		m.cursor = len(m.events) - 1
+		for d := 6; d >= 0; d-- {
+			if len(m.weekEvents[d]) > 0 {
+				m.dayIndex = d
+				m.eventIndex = len(m.weekEvents[d]) - 1
+				break
+			}
+		}
 
 	case "left", "h":
-		m.day = m.day.AddDate(0, 0, -1)
-		m.resetDay()
-		return m, m.reload()
+		m.moveToDay(-1)
 	case "right", "l":
-		m.day = m.day.AddDate(0, 0, 1)
-		m.resetDay()
+		m.moveToDay(1)
+	case "[":
+		m.weekStart = m.weekStart.AddDate(0, 0, -7)
+		m.resetWeek()
+		return m, m.reload()
+	case "]":
+		m.weekStart = m.weekStart.AddDate(0, 0, 7)
+		m.resetWeek()
 		return m, m.reload()
 	case "t":
-		m.day = today()
-		m.resetDay()
+		m.weekStart = mondayOf(today())
+		m.resetWeek()
 		return m, m.reload()
 
 	case "n":
-		m.form.reset()
+		m.form.reset(m.focusedDay())
 		m.screen = screenForm
-	case "e", "enter":
-		if len(m.events) > 0 {
-			ev := m.events[m.cursor]
-			m.form.setEvent(&ev)
+	case "e":
+		if ev := m.focusedEvent(); ev != nil {
+			m.form.setEvent(ev)
 			m.screen = screenForm
 		}
+	case "enter":
+		if ev := m.focusedEvent(); ev != nil {
+			e := *ev
+			m.popupEvent = &e
+			m.popup = true
+		}
 	case "d":
-		if len(m.events) > 0 {
-			ev := m.events[m.cursor]
-			m.confirm = &ev
+		if ev := m.focusedEvent(); ev != nil {
+			e := *ev
+			m.confirm = &e
 			m.confirmErr = nil
 			m.screen = screenConfirm
 		}
@@ -202,17 +429,34 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) resetDay() {
-	m.events = nil
-	m.loaded = false
-	m.cursor = 0
-	m.loading = true
+// updatePopup handles the modal detail overlay.
+func (m *Model) updatePopup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "enter", "q", " ":
+		m.popup = false
+		m.popupEvent = nil
+	case "e":
+		if m.popupEvent != nil {
+			m.form.setEvent(m.popupEvent)
+			m.popup = false
+			m.popupEvent = nil
+			m.screen = screenForm
+		}
+	case "d":
+		if m.popupEvent != nil {
+			m.confirm = m.popupEvent
+			m.popup = false
+			m.popupEvent = nil
+			m.confirmErr = nil
+			m.screen = screenConfirm
+		}
+	}
+	return m, nil
 }
 
 func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "y", "enter":
-		m.ctx = context.Background()
 		id := m.confirm.Id
 		m.confirm = nil
 		m.screen = screenList
@@ -234,7 +478,7 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		m.screen = screenList
-		m.form.reset()
+		m.form.reset(time.Now())
 		return m, nil
 
 	case "enter":
@@ -271,7 +515,7 @@ func (m *Model) saveEvent(ev *gcal.Event, create bool) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		if create {
-			_, err = m.client.CreateEvent(m.ctx, ev)
+			_, err = m.client.CreateEvent(ctx, ev)
 		} else {
 			_, err = m.client.UpdateEvent(ctx, ev)
 		}
@@ -295,6 +539,9 @@ func (m *Model) View() string {
 		return m.renderConfirm()
 	default:
 		v := m.renderList()
+		if m.popup && m.popupEvent != nil {
+			v = overlay(v, m.renderPopup(m.popupEvent), m.width, m.height)
+		}
 		if m.help {
 			v = lipgloss.JoinVertical(lipgloss.Center, v, m.renderHelp())
 		}
@@ -322,9 +569,11 @@ func (m *Model) renderConfirm() string {
 func (m *Model) renderHelp() string {
 	lines := []struct{ key, desc string }{
 		{"j/k, ↑/↓", "move between events"},
-		{"h/l, ←/→", "previous / next day"},
-		{"t", "jump to today"},
-		{"enter, e", "edit event"},
+		{"h/l, ←/→", "move between days"},
+		{"[/]", "previous / next week"},
+		{"t", "jump to this week"},
+		{"enter", "open event detail"},
+		{"e", "edit event"},
 		{"n", "new event"},
 		{"d", "delete event"},
 		{"r", "refresh"},
@@ -351,4 +600,33 @@ func eventTimeLine(e *gcal.Event) string {
 		return "??:??"
 	}
 	return t.Format("15:04")
+}
+
+// overlay centers `popup` on top of `base` and blanks/dims the surroundings.
+func overlay(base, popup string, w, h int) string {
+	// Render the popup box spanning only the lines it occupies.
+	placed := lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, popup)
+	lines := strings.Split(placed, "\n")
+	orig := strings.Split(base, "\n")
+	max := len(orig)
+	if len(lines) > max {
+		max = len(lines)
+	}
+	out := make([]string, 0, max)
+	for i := 0; i < max; i++ {
+		var o string
+		if i < len(orig) {
+			o = orig[i]
+		}
+		var p string
+		if i < len(lines) {
+			p = lines[i]
+		}
+		if strings.TrimSpace(p) == "" {
+			out = append(out, o)
+		} else {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "\n")
 }

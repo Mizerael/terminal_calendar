@@ -37,16 +37,21 @@ is stored in `token.json` (git-ignored) so you only authenticate once.
 
 ## Usage
 
+The main view shows a **week** (Monday → Sunday) with events listed under each
+day. Move across the week and open events for full detail.
+
 | Key        | Action                    |
 |------------|---------------------------|
 | `j`/`k`, `↑`/`↓` | move between events |
-| `h`/`l`, `←`/`→` | previous / next day  |
-| `t`        | jump to today             |
-| `enter`/`e` | edit event               |
-| `n`        | new event                 |
+| `h`/`l`, `←`/`→` | move between days (lands near the same time-of-day) |
+| `[` / `]`  | previous / next week      |
+| `t`        | jump to the current week  |
+| `enter`    | open event detail (modal popup; `esc`/`enter` closes, `e` edit, `d` delete) |
+| `e`        | edit the focused event    |
+| `n`        | new event (start date pre-filled with the focused day) |
 | `d`        | delete event (confirm)    |
 | `r`        | refresh                   |
-| `g`/`G`    | top / bottom              |
+| `g`/`G`    | top / bottom of the week  |
 | `?`        | help                      |
 | `q`/`ctrl+c` | quit                    |
 

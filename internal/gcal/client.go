@@ -299,8 +299,12 @@ func loadAccountHint(tokenPath string) string {
 // ListEvents returns events overlapping the given day, ordered by start time.
 func (c *Client) ListEvents(ctx context.Context, day time.Time) ([]Event, error) {
 	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
-	end := start.Add(24 * time.Hour)
+	return c.ListEventsRange(ctx, start, start.Add(24*time.Hour))
+}
 
+// ListEventsRange returns all events overlapping [start, end), ordered by
+// start time. A single API call covers an arbitrary range (e.g. a whole week).
+func (c *Client) ListEventsRange(ctx context.Context, start, end time.Time) ([]Event, error) {
 	evs, err := c.svc.Events.List(c.calID).
 		TimeMin(start.Format(time.RFC3339)).
 		TimeMax(end.Format(time.RFC3339)).

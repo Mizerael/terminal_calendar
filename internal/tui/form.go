@@ -78,7 +78,9 @@ func placeholder(id fieldID) string {
 	return ""
 }
 
-func (f *form) reset() {
+// reset clears the form and pre-fills the start date with defaultDate when
+// it is non-zero (used to seed a new event with the selected day).
+func (f *form) reset(defaultDate time.Time) {
 	for i := range f.inputs {
 		f.inputs[i].SetValue("")
 		f.inputs[i].Blur()
@@ -86,11 +88,14 @@ func (f *form) reset() {
 	f.focus = 0
 	f.editing = nil
 	f.err = ""
+	if !defaultDate.IsZero() {
+		f.inputs[fieldStartDate].SetValue(defaultDate.Format("2006-01-02"))
+	}
 	f.inputs[fieldTitle].Focus()
 }
 
 func (f *form) setEvent(e *gcal.Event) {
-	f.reset()
+	f.reset(time.Time{})
 	f.editing = e
 	f.inputs[fieldTitle].SetValue(e.Summary)
 	f.inputs[fieldLocation].SetValue(e.Location)

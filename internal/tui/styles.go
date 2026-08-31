@@ -29,19 +29,24 @@ var (
 			Background(lipgloss.Color("238")).
 			Foreground(lipgloss.Color("254"))
 
-	listBox = lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Padding(0, 1)
+	dayHeader = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("245"))
 
-	detailBox = lipgloss.NewStyle().
+	dayHeaderSelected = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("205")).
+				Background(lipgloss.Color("236")).
+				Padding(0, 1)
+
+	popupTitle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("214"))
+
+	popupBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("203")).
 			Padding(1, 2)
-
-	detailTitle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("214"))
 
 	detailLabel = lipgloss.NewStyle().
 			Bold(true).

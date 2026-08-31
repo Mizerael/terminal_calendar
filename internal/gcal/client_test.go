@@ -2,8 +2,15 @@ package gcal
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/option"
 )
 
 func TestParseTimeVariants(t *testing.T) {
@@ -174,5 +181,37 @@ func TestResolveAccountPassesPrefill(t *testing.T) {
 	}
 	if current != "prev@gmail.com" {
 		t.Errorf("prefill = %q, want prev@gmail.com", current)
+	}
+}
+
+func TestListEventsRange(t *testing.T) {
+	var gotMin, gotMax string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMin = r.URL.Query().Get("timeMin")
+		gotMax = r.URL.Query().Get("timeMax")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"items":[]}`)
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{svc: svc, calID: "primary"}
+
+	start := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	evs, err := c.ListEventsRange(context.Background(), start, start.Add(7*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("unexpected events: %d", len(evs))
+	}
+	if gotMin != "2026-08-31T00:00:00Z" {
+		t.Errorf("timeMin = %q", gotMin)
+	}
+	if gotMax != "2026-09-07T00:00:00Z" {
+		t.Errorf("timeMax = %q", gotMax)
 	}
 }
