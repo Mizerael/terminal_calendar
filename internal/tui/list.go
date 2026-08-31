@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
+	"github.com/Mizerael/terminal_calendar/internal/domain"
 )
 
 // renderList builds the week view: a header, a status line and the week grid
@@ -70,7 +70,7 @@ func (m *Model) renderStatus() string {
 
 // eventShortTitle returns a short label for the focused event for the status
 // line, truncated so it does not crowd the hint.
-func eventShortTitle(e *gcal.Event) string {
+func eventShortTitle(e *domain.Event) string {
 	text := e.Summary
 	if text == "" {
 		text = "(no title)"
@@ -88,15 +88,15 @@ func weekDayLabel(idx int) string {
 
 // renderPopup draws the modal detail overlay content (no frame; the caller
 // places it and dims the background).
-func (m *Model) renderPopup(e *gcal.Event) string {
+func (m *Model) renderPopup(e *domain.Event) string {
 	var b strings.Builder
 	b.WriteString(popupTitle.Render(detailTitleText(e)) + "\n\n")
 
-	start, _ := e.StartTime()
-	end, _ := e.EndTime()
+	start := e.StartTime()
+	end := e.EndTime()
 	if !start.IsZero() {
 		var when string
-		if e.AllDay() {
+		if e.AllDay {
 			when = start.Format("Mon 02 Jan") + " — all day"
 			if !end.IsZero() && !start.Equal(end) {
 				when += " through " + end.Format("Mon 02 Jan")
@@ -112,7 +112,7 @@ func (m *Model) renderPopup(e *gcal.Event) string {
 	if e.Description != "" {
 		fmt.Fprintf(&b, "\n%s\n", detailValue.Render(e.Description))
 	}
-	if e.RecurringEventId != "" {
+	if e.RecurringEventID != "" {
 		fmt.Fprintf(&b, "\n%s\n", subtle.Render("part of a recurring series"))
 	}
 	b.WriteString("\n")
@@ -121,7 +121,7 @@ func (m *Model) renderPopup(e *gcal.Event) string {
 	return popupBox.Width(m.width - 6).Render(b.String())
 }
 
-func detailTitleText(e *gcal.Event) string {
+func detailTitleText(e *domain.Event) string {
 	if e.Summary != "" {
 		return e.Summary
 	}

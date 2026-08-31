@@ -1,4 +1,4 @@
-module gitnub.com/Mizerael/terminal_calendar
+module github.com/Mizerael/terminal_calendar
 
 go 1.27.0
 

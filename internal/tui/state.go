@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"os"
+
+	"github.com/Mizerael/terminal_calendar/internal/usecase"
 )
 
 // statePath is the default location of the persisted calendar selection. It
@@ -24,8 +26,8 @@ func (m *Model) SetStatePath(p string) {
 // SetInitialTarget sets the create-target calendar used unless a previously
 // persisted selection overrides it. Called by main with GOOGLE_CALENDAR_ID.
 func (m *Model) SetInitialTarget(id string) {
-	if m.targetCalID == "" && id != "" {
-		m.targetCalID = id
+	if m.sel.Target == "" && id != "" {
+		m.sel.Target = id
 	}
 }
 
@@ -39,7 +41,7 @@ func (m *Model) statePathOrDefault() string {
 
 // loadState reads a previously saved calendar selection, if any. It does not
 // reconcile the selection against the fetched calendar list; that happens in
-// applyDefaultCalendarSelection once calendars are loaded.
+// reconcileSelection once calendars are loaded.
 func (m *Model) loadState() {
 	data, err := os.ReadFile(m.statePathOrDefault())
 	if err != nil {
@@ -50,19 +52,19 @@ func (m *Model) loadState() {
 		return
 	}
 	if len(s.Enabled) > 0 {
-		m.isEnabled = s.Enabled
+		m.sel.Enabled = s.Enabled
 	}
-	m.targetCalID = s.TargetCalID
+	m.sel.Target = s.TargetCalID
 }
 
 // saveState writes the current calendar selection to disk.
 func (m *Model) saveState() {
 	s := persistedState{
-		Enabled:     m.isEnabled,
-		TargetCalID: m.targetCalID,
+		Enabled:     m.sel.Enabled,
+		TargetCalID: m.sel.Target,
 	}
-	if m.targetCalID == "" && len(m.calendars) > 0 {
-		s.TargetCalID = m.primaryCalID()
+	if m.sel.Target == "" && len(m.calendars) > 0 {
+		s.TargetCalID = usecase.PrimaryCalID(m.calendars)
 	}
 	data, err := json.Marshal(s)
 	if err != nil {
@@ -71,51 +73,9 @@ func (m *Model) saveState() {
 	_ = os.WriteFile(m.statePathOrDefault(), data, 0o600)
 }
 
-// applyDefaultCalendarSelection reconciles the persisted (or empty) selection
-// against the freshly loaded calendar list. Called once whenever the calendar
-// list is fetched.
-func (m *Model) applyDefaultCalendarSelection() {
-	if m.isEnabled == nil {
-		m.isEnabled = map[string]bool{}
-	}
-	// Drop enabled ids that no longer exist.
-	for id := range m.isEnabled {
-		if !m.hasCalendar(id) {
-			delete(m.isEnabled, id)
-		}
-	}
-	// If nothing is enabled yet, default to showing every calendar.
-	if len(m.isEnabled) == 0 {
-		for _, cal := range m.calendars {
-			m.isEnabled[cal.ID] = true
-		}
-	}
-	// Default the create-target to the primary calendar when unset or invalid.
-	if m.targetCalID == "" || !m.hasCalendar(m.targetCalID) {
-		m.targetCalID = m.primaryCalID()
-	}
-}
-
-// primaryCalID returns the user's primary calendar id, falling back to the
-// first calendar, or "" if there are none.
-func (m *Model) primaryCalID() string {
-	for _, cal := range m.calendars {
-		if cal.Primary {
-			return cal.ID
-		}
-	}
-	if len(m.calendars) > 0 {
-		return m.calendars[0].ID
-	}
-	return ""
-}
-
-// hasCalendar reports whether id is present in the calendar list.
-func (m *Model) hasCalendar(id string) bool {
-	for _, cal := range m.calendars {
-		if cal.ID == id {
-			return true
-		}
-	}
-	return false
+// reconcileSelection brings the calendar selection in line with the fetched
+// calendar list (dropping stale ids, defaulting to all and a primary target).
+// The policy lives in usecase.Selection; this adapter just applies it.
+func (m *Model) reconcileSelection() {
+	m.sel.Reconcile(m.calendars)
 }

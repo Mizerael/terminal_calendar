@@ -11,9 +11,13 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
 
-	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
-	"gitnub.com/Mizerael/terminal_calendar/internal/tui"
+	"github.com/Mizerael/terminal_calendar/internal/gcal"
+	"github.com/Mizerael/terminal_calendar/internal/tui"
+	"github.com/Mizerael/terminal_calendar/internal/usecase"
 )
+
+// compile-time assertion that the Google gateway satisfies the use-case port.
+var _ usecase.CalendarGateway = (*gcal.Client)(nil)
 
 func main() {
 	// Load .env from the current directory without overriding real env vars.
@@ -43,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	model, err := tui.New(client)
+	model, err := tui.New(usecase.NewCalendarService(client))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

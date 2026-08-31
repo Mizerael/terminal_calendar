@@ -2,7 +2,7 @@ BINARY   := terminal_calendar
 BINDIR   := build
 GO       := go
 
-.PHONY: all build run test vet fmt clean install
+.PHONY: all build run test alltest vet fmt clean install
 
 all: build
 
@@ -14,6 +14,9 @@ run: build
 
 test:
 	$(GO) test ./...
+
+alltest: ## run the whole suite fresh, ignoring the test cache (mirrors CI)
+	$(GO) test -count=1 ./...
 
 vet:
 	$(GO) vet ./...

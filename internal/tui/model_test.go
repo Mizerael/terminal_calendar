@@ -10,39 +10,42 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
+	"github.com/Mizerael/terminal_calendar/internal/domain"
+	"github.com/Mizerael/terminal_calendar/internal/usecase"
 )
 
-// fakeAPI is a configurable stub backing the TUI.
+// fakeAPI is a configurable stub for the usecase.CalendarGateway port, backing
+// the TUI.
 type fakeAPI struct {
-	calendars []gcal.Calendar
+	calendars []domain.Calendar
 	// events is the flat fallback list used when mapEvents is empty.
-	events    []gcal.Event
-	mapEvents map[string][]gcal.Event
+	events    []domain.Event
+	mapEvents map[string][]domain.Event
+	calErr    error
 	listErr   error
-	created   []*gcal.Event
-	updated   []*gcal.Event
+	created   []*domain.Event
+	updated   []*domain.Event
 	deleted   []string
 }
 
-func (f *fakeAPI) ListCalendars(ctx context.Context) ([]gcal.Calendar, error) {
-	if f.listErr != nil {
-		return nil, f.listErr
+func (f *fakeAPI) ListCalendars(ctx context.Context) ([]domain.Calendar, error) {
+	if f.calErr != nil {
+		return nil, f.calErr
 	}
 	return f.calendars, nil
 }
 
-func (f *fakeAPI) ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]gcal.Event, error) {
+func (f *fakeAPI) ListEventsRangeIn(ctx context.Context, calID string, start, end time.Time) ([]domain.Event, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	var src []gcal.Event
+	var src []domain.Event
 	if f.mapEvents != nil {
 		src = f.mapEvents[calID]
 	} else {
 		src = f.events
 	}
-	out := make([]gcal.Event, len(src))
+	out := make([]domain.Event, len(src))
 	for i, e := range src {
 		e.CalendarID = calID
 		if e.CalendarSummary == "" {
@@ -52,11 +55,11 @@ func (f *fakeAPI) ListEventsRangeIn(ctx context.Context, calID string, start, en
 	}
 	return out, nil
 }
-func (f *fakeAPI) CreateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error) {
+func (f *fakeAPI) CreateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
 	f.created = append(f.created, e)
 	return e, nil
 }
-func (f *fakeAPI) UpdateEventIn(ctx context.Context, calID string, e *gcal.Event) (*gcal.Event, error) {
+func (f *fakeAPI) UpdateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
 	f.updated = append(f.updated, e)
 	return e, nil
 }
@@ -65,18 +68,35 @@ func (f *fakeAPI) DeleteEventIn(ctx context.Context, calID, id string) error {
 	return nil
 }
 
-// mkEvent builds an event with an explicit UTC time.
-func mkEvent(summary, id string, h, m int) gcal.Event {
-	return gcal.Event{
-		Summary: summary,
-		Id:      id,
-		Start:   &gcal.EDT{DateTime: fmt.Sprintf("2026-08-31T%02d:%02d:00Z", h, m)},
-		End:     &gcal.EDT{DateTime: fmt.Sprintf("2026-08-31T%02d:%02d:00Z", h, m)},
-	}
+// makeEvent builds a timed event anchored to 2026-08-31 (a Monday) at the
+// given UTC hour/min.
+func makeEvent(summary, id string, h, m int) domain.Event {
+	return eventAt(summary, id,
+		fmt.Sprintf("2026-08-31T%02d:%02d:00Z", h, m),
+		fmt.Sprintf("2026-08-31T%02d:%02d:00Z", h, m))
+}
+
+// eventAt builds a timed event from RFC3339 start/end strings.
+func eventAt(summary, id, startRFC, endRFC string) domain.Event {
+	start, _ := time.Parse(time.RFC3339, startRFC)
+	end, _ := time.Parse(time.RFC3339, endRFC)
+	return domain.Event{ID: id, Summary: summary, Start: start, End: end}
+}
+
+// eventOn builds an event on the given date (RFC3339 date, UTC) at hour/min.
+func eventOn(summary, id, date string, h, m int) domain.Event {
+	s, _ := time.Parse(time.RFC3339, fmt.Sprintf("%sT%02d:%02d:00Z", date, h, m))
+	return domain.Event{ID: id, Summary: summary, Start: s, End: s}
+}
+
+// alldayOn builds an all-day event on the given date (local midnight).
+func alldayOn(summary, id, date string) domain.Event {
+	start, _ := time.Parse("2006-01-02", date)
+	return domain.Event{ID: id, Summary: summary, Start: start, End: start.AddDate(0, 0, 1), AllDay: true}
 }
 
 func newTestModel(f *fakeAPI) (*Model, error) {
-	return New(f)
+	return New(usecase.NewCalendarService(f))
 }
 
 // load groups the fake events into the model just like the real load does.
@@ -125,11 +145,11 @@ func run(t *testing.T, m *Model, msg tea.Msg) *Model {
 
 func TestLoadGroupsEventsByDay(t *testing.T) {
 	// 2026-08-31 is a Monday.
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("Mon morning", "a", 9, 0),
-		mkEvent("Mon afternoon", "b", 14, 0),
-		{Summary: "Tue day", Id: "c", Start: &gcal.EDT{Date: "2026-09-01"}, End: &gcal.EDT{Date: "2026-09-01"}},
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("Mon morning", "a", 9, 0),
+		makeEvent("Mon afternoon", "b", 14, 0),
+		alldayOn("Tue day", "c", "2026-09-01"),
 	}}
 	m, _ := newTestModel(f)
 	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -151,11 +171,11 @@ func TestLoadGroupsEventsByDay(t *testing.T) {
 }
 
 func TestKeyNavMovesAcrossDays(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("A", "a", 9, 0),  // Mon
-		mkEvent("B", "b", 11, 0), // Mon
-		{Summary: "C", Id: "c", Start: &gcal.EDT{DateTime: "2026-09-01T10:00:00Z"}, End: &gcal.EDT{DateTime: "2026-09-01T10:00:00Z"}}, // Tue
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("A", "a", 9, 0),              // Mon
+		makeEvent("B", "b", 11, 0),             // Mon
+		eventOn("C", "c", "2026-09-01", 10, 0), // Tue
 	}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -192,12 +212,12 @@ func TestKeyNavMovesAcrossDays(t *testing.T) {
 }
 
 func TestDayNavigationLandsNearTime(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("A", "a", 9, 0),  // Mon 09:00
-		mkEvent("B", "b", 14, 0), // Mon 14:00
-		{Summary: "C", Id: "c", Start: &gcal.EDT{DateTime: "2026-09-01T10:00:00Z"}, End: &gcal.EDT{DateTime: "2026-09-01T10:00:00Z"}}, // Tue 10:00
-		{Summary: "D", Id: "d", Start: &gcal.EDT{DateTime: "2026-09-01T15:00:00Z"}, End: &gcal.EDT{DateTime: "2026-09-01T15:00:00Z"}}, // Tue 15:00
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("A", "a", 9, 0),              // Mon 09:00
+		makeEvent("B", "b", 14, 0),             // Mon 14:00
+		eventOn("C", "c", "2026-09-01", 10, 0), // Tue 10:00
+		eventOn("D", "d", "2026-09-01", 15, 0), // Tue 15:00
 	}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -223,7 +243,7 @@ func TestDayNavigationLandsNearTime(t *testing.T) {
 }
 
 func TestWeekNavigation(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local) // a Monday
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC) // a Monday
 	f := &fakeAPI{}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -241,14 +261,14 @@ func TestWeekNavigation(t *testing.T) {
 	}
 	m = upd(t, m, msgKey("]"))
 	m = upd(t, m, msgKey("t"))
-	if !m.weekStart.Equal(mondayOf(today())) {
+	if !m.weekStart.Equal(domain.MondayOf(today())) {
 		t.Fatalf("after t: weekStart = %v, want this week", m.weekStart)
 	}
 }
 
 func TestModalPopupFlow(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{mkEvent("Detail target", "x", 9, 0)}}
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{makeEvent("Detail target", "x", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
 	m = load(t, m, f)
@@ -275,8 +295,8 @@ func TestModalPopupFlow(t *testing.T) {
 }
 
 func TestPopupEditAndDelete(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{mkEvent("Pop", "1", 9, 0)}}
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{makeEvent("Pop", "1", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
 	m = load(t, m, f)
@@ -325,21 +345,15 @@ func TestCreateEventFromForm(t *testing.T) {
 	if ev.Summary != "Retro" {
 		t.Errorf("summary = %q", ev.Summary)
 	}
-	start, err := parseFormTime(ev.Start.DateTime)
-	if err != nil {
-		t.Fatalf("bad start datetime %q: %v", ev.Start.DateTime, err)
-	}
+	start := ev.StartTime()
 	if start.Format("2006-01-02 15:04") != "2026-09-01 10:30" {
 		t.Errorf("unexpected start: %v", start)
 	}
-	end, err := parseFormTime(ev.End.DateTime)
-	if err != nil {
-		t.Fatalf("bad end datetime %q: %v", ev.End.DateTime, err)
-	}
+	end := ev.EndTime()
 	if end.Format("2006-01-02 15:04") != "2026-09-01 11:00" {
 		t.Errorf("unexpected end: %v", end)
 	}
-	if tz := ev.Start.TimeZone; tz != "" {
+	if tz := ev.Timezone(); tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {
 			t.Errorf("start timeZone %q is not a valid IANA zone", tz)
 		}
@@ -347,7 +361,7 @@ func TestCreateEventFromForm(t *testing.T) {
 }
 
 func TestNewEventPrefillsFocusedDay(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -357,15 +371,6 @@ func TestNewEventPrefillsFocusedDay(t *testing.T) {
 	if got := m.form.value(fieldStartDate); got != "2026-09-02" {
 		t.Errorf("start date prefilled = %q, want 2026-09-02", got)
 	}
-}
-
-// parseFormTime accepts both layouts we emit: with an explicit timeZone
-// ("2006-01-02T15:04:05") or with an embedded offset (RFC3339).
-func parseFormTime(v string) (time.Time, error) {
-	if t, err := time.Parse("2006-01-02T15:04:05", v); err == nil {
-		return t, nil
-	}
-	return time.Parse(time.RFC3339, v)
 }
 
 func TestAllDayEventFromForm(t *testing.T) {
@@ -382,11 +387,11 @@ func TestAllDayEventFromForm(t *testing.T) {
 		t.Fatalf("expected 1 created event, got %d", len(f.created))
 	}
 	ev := f.created[0]
-	if !ev.AllDay() {
+	if !ev.AllDay {
 		t.Fatal("expected all-day event")
 	}
-	if ev.Start.Date != "2026-12-24" || ev.End.Date != "2026-12-25" {
-		t.Errorf("unexpected dates: %+v / %+v", ev.Start, ev.End)
+	if ev.StartTime().Format("2006-01-02") != "2026-12-24" || ev.EndTime().Format("2006-01-02") != "2026-12-25" {
+		t.Errorf("unexpected dates: %v / %v", ev.StartTime(), ev.EndTime())
 	}
 }
 
@@ -429,13 +434,17 @@ func TestFormValidationEndBeforeStart(t *testing.T) {
 }
 
 func TestEditEventPrefillsForm(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{{
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	berlin, _ := time.LoadLocation("Europe/Berlin")
+	start := time.Date(2026, 8, 31, 9, 0, 0, 0, berlin)
+	f := &fakeAPI{events: []domain.Event{{
+		ID:          "e1",
 		Summary:     "Old",
 		Location:    "Room 1",
 		Description: "notes",
-		Start:       &gcal.EDT{DateTime: "2026-08-31T09:00:00Z", TimeZone: "Europe/Berlin"},
-		End:         &gcal.EDT{DateTime: "2026-08-31T10:00:00Z", TimeZone: "Europe/Berlin"},
+		Start:       start,
+		End:         start.Add(time.Hour),
+		TimeZone:    "Europe/Berlin",
 	}}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -464,8 +473,8 @@ func TestEditEventPrefillsForm(t *testing.T) {
 }
 
 func TestDeleteFlow(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{mkEvent("doomed", "abc", 9, 0)}}
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{makeEvent("doomed", "abc", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
 	m = load(t, m, f)
@@ -484,8 +493,8 @@ func TestDeleteFlow(t *testing.T) {
 }
 
 func TestDeleteCancel(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{mkEvent("survivor", "abc", 9, 0)}}
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{makeEvent("survivor", "abc", 9, 0)}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
 	m = load(t, m, f)
@@ -518,8 +527,8 @@ func TestMondayOf(t *testing.T) {
 		{time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)},  // Sunday -> Monday
 	}
 	for _, c := range cases {
-		if got := mondayOf(c.day); !got.Equal(c.want) {
-			t.Errorf("mondayOf(%v) = %v, want %v", c.day, got, c.want)
+		if got := domain.MondayOf(c.day); !got.Equal(c.want) {
+			t.Errorf("MondayOf(%v) = %v, want %v", c.day, got, c.want)
 		}
 	}
 }
@@ -527,18 +536,14 @@ func TestMondayOf(t *testing.T) {
 // TestGridRender checks the grid lays out hour spans and clash markers, and
 // prints the rendered output for visual inspection.
 func TestGridRender(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	// events: Mon 09-10 "Standup", Mon 09:30-11 "Deep", Tue all-day "Holiday",
 	// Wed 14-16 "Workshop"
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("Standup", "a", 9, 0),
-		{Summary: "Deep", Id: "b",
-			Start: &gcal.EDT{DateTime: "2026-08-31T09:30:00Z"},
-			End:   &gcal.EDT{DateTime: "2026-08-31T11:00:00Z"}},
-		{Summary: "Holiday", Id: "c", Start: &gcal.EDT{Date: "2026-09-01"}, End: &gcal.EDT{Date: "2026-09-01"}},
-		{Summary: "Workshop", Id: "d",
-			Start: &gcal.EDT{DateTime: "2026-09-02T14:00:00Z"},
-			End:   &gcal.EDT{DateTime: "2026-09-02T16:00:00Z"}},
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("Standup", "a", 9, 0),
+		eventAt("Deep", "b", "2026-08-31T09:30:00Z", "2026-08-31T11:00:00Z"),
+		alldayOn("Holiday", "c", "2026-09-01"),
+		eventAt("Workshop", "d", "2026-09-02T14:00:00Z", "2026-09-02T16:00:00Z"),
 	}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -567,11 +572,9 @@ func TestGridRender(t *testing.T) {
 // recurring series, e.g. 09:00-09:30) is actually drawn in the grid rather
 // than vanishing as a zero-length block.
 func TestGridRenderShortEvent(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		{Summary: "Quick sync", Id: "a",
-			Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"},
-			End:   &gcal.EDT{DateTime: "2026-08-31T09:30:00Z"}},
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		eventAt("Quick sync", "a", "2026-08-31T09:00:00Z", "2026-08-31T09:30:00Z"),
 	}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -588,11 +591,11 @@ func TestGridRenderShortEvent(t *testing.T) {
 // TestWeekRendersSmoke ensures View() does not panic for the week and popup
 // states (catching layout bugs) and produces non-empty output.
 func TestWeekRendersSmoke(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("A", "a", 9, 0),
-		mkEvent("B", "b", 14, 0),
-		{Summary: "C", Id: "c", Start: &gcal.EDT{Date: "2026-09-01"}, End: &gcal.EDT{Date: "2026-09-01"}},
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("A", "a", 9, 0),
+		makeEvent("B", "b", 14, 0),
+		alldayOn("C", "c", "2026-09-01"),
 	}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -628,21 +631,21 @@ func TestWeekRendersSmoke(t *testing.T) {
 
 func TestHourRange(t *testing.T) {
 	// timed event 09:00-11:00
-	e := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T11:00:00Z"}}
-	s, en, ok := hourRange(e)
+	e := eventAt("x", "1", "2026-08-31T09:00:00Z", "2026-08-31T11:00:00Z")
+	s, en, ok := hourRange(&e)
 	if !ok || s != 9 || en != 11 {
 		t.Errorf("hourRange = %d,%d,%v, want 9,11,true", s, en, ok)
 	}
 
 	// all-day event -> not ok
-	ad := &gcal.Event{Start: &gcal.EDT{Date: "2026-08-31"}, End: &gcal.EDT{Date: "2026-08-31"}}
-	if _, _, ok := hourRange(ad); ok {
+	ad := alldayOn("ad", "2", "2026-08-31")
+	if _, _, ok := hourRange(&ad); ok {
 		t.Error("all-day event should report ok=false")
 	}
 
 	// zero-length event -> at least one hour
-	zl := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T10:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T10:00:00Z"}}
-	s, en, ok = hourRange(zl)
+	zl := eventAt("zl", "3", "2026-08-31T10:00:00Z", "2026-08-31T10:00:00Z")
+	s, en, ok = hourRange(&zl)
 	if !ok || s != 10 || en != 11 {
 		t.Errorf("zero-length hourRange = %d,%d,%v, want 10,11,true", s, en, ok)
 	}
@@ -653,10 +656,7 @@ func TestHourRange(t *testing.T) {
 	loc := time.Local
 	sLoc := time.Date(2026, 9, 1, 23, 30, 0, 0, loc)
 	eLoc := time.Date(2026, 9, 2, 0, 30, 0, 0, loc)
-	cross := &gcal.Event{
-		Start: &gcal.EDT{DateTime: sLoc.Format(time.RFC3339)},
-		End:   &gcal.EDT{DateTime: eLoc.Format(time.RFC3339)},
-	}
+	cross := &domain.Event{Start: sLoc, End: eLoc}
 	s, en, ok = hourRange(cross)
 	if !ok {
 		t.Fatal("crossing event should parse")
@@ -673,15 +673,15 @@ func TestHourRange(t *testing.T) {
 // recurring series, e.g. a 09:00-09:30 standup) still fills its start-hour row
 // instead of becoming an invisible zero-length block.
 func TestHourRangeSameHour(t *testing.T) {
-	e := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T09:30:00Z"}}
-	s, en, ok := hourRange(e)
+	e := eventAt("x", "1", "2026-08-31T09:00:00Z", "2026-08-31T09:30:00Z")
+	s, en, ok := hourRange(&e)
 	if !ok || s != 9 || en != 10 {
 		t.Errorf("hourRange = %d,%d,%v, want 9,10,true", s, en, ok)
 	}
 
 	// 09:00-10:30 spans two full rows.
-	e2 := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T10:30:00Z"}}
-	s2, en2, ok2 := hourRange(e2)
+	e2 := eventAt("y", "2", "2026-08-31T09:00:00Z", "2026-08-31T10:30:00Z")
+	s2, en2, ok2 := hourRange(&e2)
 	if !ok2 || s2 != 9 || en2 != 11 {
 		t.Errorf("hourRange = %d,%d,%v, want 9,11,true", s2, en2, ok2)
 	}
@@ -711,10 +711,10 @@ func TestEmptyCellCursorRequiresSelection(t *testing.T) {
 // TestFocusedEventMarker ensures the selected event gets a distinct ▸ marker
 // in the grid so the selection is obvious in a merged view.
 func TestFocusedEventMarker(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("Standup", "a", 9, 0),
-		mkEvent("Other", "b", 14, 0),
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("Standup", "a", 9, 0),
+		makeEvent("Other", "b", 14, 0),
 	}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -746,7 +746,7 @@ func TestColWidth(t *testing.T) {
 }
 
 func TestWindowResizeFillsTerminal(t *testing.T) {
-	m, _ := newTestModel(&fakeAPI{events: []gcal.Event{mkEvent("A", "a", 9, 0)}})
+	m, _ := newTestModel(&fakeAPI{events: []domain.Event{makeEvent("A", "a", 9, 0)}})
 
 	// small terminal
 	m = upd(t, m, tea.WindowSizeMsg{Width: 40, Height: 12})
@@ -775,9 +775,11 @@ func TestWindowResizeFillsTerminal(t *testing.T) {
 }
 
 func TestResizeKeepsFocusVisible(t *testing.T) {
-	m, _ := newTestModel(&fakeAPI{events: []gcal.Event{mkEvent("late", "a", 22, 0)}})
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	m, _ := newTestModel(&fakeAPI{events: []domain.Event{makeEvent("late", "a", 22, 0)}})
+	m.weekStart = mon
 	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 60})
-	m = load(t, m, &fakeAPI{events: []gcal.Event{mkEvent("late", "a", 22, 0)}})
+	m = load(t, m, &fakeAPI{events: []domain.Event{makeEvent("late", "a", 22, 0)}})
 	m.dayIndex, m.eventIndex = 0, 0
 
 	// On a tall window all 24 hours fit, focus hour 22 is visible.
@@ -820,7 +822,7 @@ func TestScrollKeysAdjustWindow(t *testing.T) {
 
 func TestEnsureVisible(t *testing.T) {
 	m := &Model{scrollHour: 6, cursorHour: 6}
-	m.weekEvents[0] = []gcal.Event{mkEvent("late", "x", 22, 0)}
+	m.weekEvents[0] = []domain.Event{makeEvent("late", "x", 22, 0)}
 	m.dayIndex = 0
 	m.eventIndex = 0
 	m.ensureVisible(10) // window [6,16)
@@ -830,11 +832,11 @@ func TestEnsureVisible(t *testing.T) {
 }
 
 func TestGridNavigationByEvent(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("Early", "a", 8, 0), // Mon 08
-		mkEvent("Late", "b", 20, 0), // Mon 20
-		{Summary: "Night", Id: "c", Start: &gcal.EDT{DateTime: "2026-09-02T23:00:00+04:00"}, End: &gcal.EDT{DateTime: "2026-09-03T00:30:00+04:00"}}, // Wed 23
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("Early", "a", 8, 0), // Mon 08
+		makeEvent("Late", "b", 20, 0), // Mon 20
+		eventAt("Night", "c", "2026-09-02T23:00:00+04:00", "2026-09-03T00:30:00+04:00"), // Wed 23 local
 	}}
 	m, _ := newTestModel(f)
 	m.weekStart = mon
@@ -866,11 +868,11 @@ func TestGridNavigationByEvent(t *testing.T) {
 // sizes and ensures it never panics nor produces content wider than the
 // available width.
 func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
-	f := &fakeAPI{events: []gcal.Event{
-		mkEvent("Standup morning", "a", 9, 0),
-		mkEvent("Afternoon review", "b", 14, 0),
-		{Summary: "Holiday", Id: "c", Start: &gcal.EDT{Date: "2026-09-01"}, End: &gcal.EDT{Date: "2026-09-01"}},
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	f := &fakeAPI{events: []domain.Event{
+		makeEvent("Standup morning", "a", 9, 0),
+		makeEvent("Afternoon review", "b", 14, 0),
+		alldayOn("Holiday", "c", "2026-09-01"),
 	}}
 	for _, sz := range [][2]int{{80, 20}, {100, 24}, {160, 40}, {220, 50}} {
 		m, _ := newTestModel(f)

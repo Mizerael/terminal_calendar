@@ -2,13 +2,12 @@ package tui
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
-	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
+	"github.com/Mizerael/terminal_calendar/internal/domain"
 )
 
 const (
@@ -40,48 +39,9 @@ func (m *Model) colW() int {
 	return cw
 }
 
-// hourRange returns the half-open [start, end) hour span of a timed event,
-// clamped to the 24-hour day. The end hour is inclusive of any sub-hour tail so
-// that a short event (e.g. a recurring 09:00-09:30) still fills its starting
-// hour row instead of becoming a zero-length, invisible block. ok is false for
-// all-day events or when times cannot be parsed.
-func hourRange(e *gcal.Event) (start, end int, ok bool) {
-	if e.AllDay() {
-		return 0, 0, false
-	}
-	s, err := e.StartTime()
-	if err != nil {
-		return 0, 0, false
-	}
-	en, err := e.EndTime()
-	if err != nil {
-		en = s.Add(time.Hour)
-	}
-	sh := s.Hour()
-	var eh int
-	if !en.After(s) {
-		// Zero-length or reversed: force a one-hour block.
-		eh = sh + 1
-	} else {
-		// End hour as minutes past the start's own midnight; ceil so a partial
-		// end (e.g. 09:30) occupies hour 9, while an exact hour boundary is
-		// exclusive. Values roll naturally past 24 for midnight-crossing events.
-		dayStart := time.Date(s.Year(), s.Month(), s.Day(), 0, 0, 0, 0, s.Location())
-		eh = int(math.Ceil(en.Sub(dayStart).Hours()))
-	}
-	if eh < sh {
-		eh = sh
-	}
-	if eh > 24 {
-		eh = 24
-	}
-	if sh < 0 {
-		sh = 0
-	}
-	if sh > 23 {
-		sh = 23
-	}
-	return sh, eh, true
+// hourRange delegates the pure hour-span of a timed event to the domain.
+func hourRange(e *domain.Event) (start, end int, ok bool) {
+	return domain.HourRange(e)
 }
 
 // renderGrid draws the week as a Google-Calendar-style grid: a day-header row,
@@ -146,7 +106,7 @@ func (m *Model) gridOverhead() int {
 	overhead := 2 // week header + status line
 	for d := 0; d < 7; d++ {
 		for i := range m.weekEvents[d] {
-			if m.weekEvents[d][i].AllDay() {
+			if m.weekEvents[d][i].AllDay {
 				return overhead + 1
 			}
 		}
@@ -198,7 +158,7 @@ func (m *Model) renderAllDayRow(colW int) string {
 		var names []string
 		for i := range m.weekEvents[d] {
 			e := &m.weekEvents[d][i]
-			if e.AllDay() {
+			if e.AllDay {
 				names = append(names, e.Summary)
 			}
 		}
@@ -227,7 +187,7 @@ func (m *Model) buildDayColumn(d, rows, startHour, colW int) []string {
 	var blocks []*span
 	for i := range m.weekEvents[d] {
 		e := &m.weekEvents[d][i]
-		if e.AllDay() {
+		if e.AllDay {
 			continue
 		}
 		sh, eh, ok := hourRange(e)
@@ -256,7 +216,7 @@ func (m *Model) buildDayColumn(d, rows, startHour, colW int) []string {
 type span struct {
 	start, end int
 	idx        int
-	ev         *gcal.Event
+	ev         *domain.Event
 }
 
 // renderHourCell renders the single cell at the given hour for a day.
@@ -309,7 +269,7 @@ func (m *Model) renderHourCell(d, hour int, covering map[int][]*span, now time.T
 
 // focusedEventLabel prefixes the focused event's title with a pointer so the
 // selected row is unmistakable in a merged, color-coded grid.
-func focusedEventLabel(e *gcal.Event) string {
+func focusedEventLabel(e *domain.Event) string {
 	text := e.Summary
 	if text == "" {
 		text = "(no title)"

@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 
-	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
+	"github.com/Mizerael/terminal_calendar/internal/domain"
 )
 
 type fieldID int
@@ -31,7 +31,7 @@ type form struct {
 	// focus is the index into inputs.
 	focus int
 	// editing is non-nil when we edit an existing event.
-	editing *gcal.Event
+	editing *domain.Event
 	// error line shown when validation fails.
 	err string
 }
@@ -94,22 +94,16 @@ func (f *form) reset(defaultDate time.Time) {
 	f.inputs[fieldTitle].Focus()
 }
 
-func (f *form) setEvent(e *gcal.Event) {
+func (f *form) setEvent(e *domain.Event) {
 	f.reset(time.Time{})
 	f.editing = e
 	f.inputs[fieldTitle].SetValue(e.Summary)
 	f.inputs[fieldLocation].SetValue(e.Location)
 
-	start, err := e.StartTime()
-	if err != nil {
-		return
-	}
-	end, err := e.EndTime()
-	if err != nil {
-		end = start
-	}
+	start := e.StartTime()
+	end := e.EndTime()
 	f.inputs[fieldStartDate].SetValue(formatDate(start))
-	if e.AllDay() {
+	if e.AllDay {
 		f.inputs[fieldStartTime].SetValue("")
 		f.inputs[fieldEndTime].SetValue("")
 	} else {
@@ -153,9 +147,9 @@ func (f *form) syncFocus() {
 // value returns the trimmed value of the given field.
 func (f *form) value(id fieldID) string { return strings.TrimSpace(f.inputs[id].Value()) }
 
-// buildEvent validates the form and produces a gcal.Event ready to insert or
-// update. On validation error it returns an error and stores a message.
-func (f *form) buildEvent() (*gcal.Event, error) {
+// buildEvent validates the form and produces a domain.Event ready to insert
+// or update. On validation error it returns an error and stores a message.
+func (f *form) buildEvent() (*domain.Event, error) {
 	title := f.value(fieldTitle)
 	if title == "" {
 		return nil, f.fail("title is required")
@@ -185,10 +179,11 @@ func (f *form) buildEvent() (*gcal.Event, error) {
 		return nil, f.fail("start time missing (or leave both empty for all-day)")
 	}
 
-	ev := &gcal.Event{}
+	ev := &domain.Event{}
 	if f.editing != nil {
-		ev.Id = f.editing.Id
-		ev.Etag = f.editing.Etag
+		ev.ID = f.editing.ID
+		ev.CalendarID = f.editing.CalendarID
+		ev.CalendarSummary = f.editing.CalendarSummary
 	}
 	ev.Summary = title
 	if loc := f.value(fieldLocation); loc != "" {
@@ -202,16 +197,18 @@ func (f *form) buildEvent() (*gcal.Event, error) {
 	// one from time.Local: strings like "Local" or "+04:00" are rejected by
 	// Google with a 400 error, which silently broke create/update.
 	tzName := ""
-	if f.editing != nil && f.editing.Start != nil {
-		tzName = f.editing.Start.TimeZone // provided by Google, always valid
+	if f.editing != nil && f.editing.TimeZone != "" {
+		tzName = f.editing.TimeZone // provided by Google, always valid
 	}
 	if tzName == "" {
 		tzName = localIANATimezone() // best effort from the environment
 	}
+	ev.TimeZone = tzName
 
 	if allDay {
-		ev.Start = &gcal.EDT{Date: startDate, TimeZone: tzName}
-		ev.End = &gcal.EDT{Date: endDate, TimeZone: tzName}
+		ev.AllDay = true
+		ev.Start = sd
+		ev.End = ed
 		return ev, nil
 	}
 
@@ -241,12 +238,8 @@ func (f *form) buildEvent() (*gcal.Event, error) {
 		return nil, f.fail("end must be after start")
 	}
 
-	layout := "2006-01-02T15:04:05" // timezone carried by the timeZone field
-	if tzName == "" {
-		layout = time.RFC3339 // no timeZone: embed the offset in dateTime
-	}
-	ev.Start = &gcal.EDT{DateTime: start.Format(layout), TimeZone: tzName}
-	ev.End = &gcal.EDT{DateTime: end.Format(layout), TimeZone: tzName}
+	ev.Start = start
+	ev.End = end
 	return ev, nil
 }
 

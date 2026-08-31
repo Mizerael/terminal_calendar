@@ -6,7 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
+	"github.com/Mizerael/terminal_calendar/internal/domain"
+	"github.com/Mizerael/terminal_calendar/internal/usecase"
 )
 
 // loadCalendars drives the full async load path (Init -> ListCalendars ->
@@ -33,15 +34,15 @@ func loadCalendars(t *testing.T, m *Model, f *fakeAPI) *Model {
 }
 
 func TestMergedLoadAcrossEnabledCalendars(t *testing.T) {
-	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	f := &fakeAPI{
-		calendars: []gcal.Calendar{
+		calendars: []domain.Calendar{
 			{ID: "work", Summary: "Work", Primary: true},
 			{ID: "personal", Summary: "Personal"},
 		},
-		mapEvents: map[string][]gcal.Event{
-			"work":     {mkEvent("Standup", "a", 9, 0)},
-			"personal": {mkEvent("Yoga", "b", 18, 0)},
+		mapEvents: map[string][]domain.Event{
+			"work":     {makeEvent("Standup", "a", 9, 0)},
+			"personal": {makeEvent("Yoga", "b", 18, 0)},
 		},
 	}
 	m, _ := newTestModel(f)
@@ -76,38 +77,38 @@ func TestCalendarColorStable(t *testing.T) {
 
 func TestPickerToggleAndTarget(t *testing.T) {
 	f := &fakeAPI{
-		calendars: []gcal.Calendar{
+		calendars: []domain.Calendar{
 			{ID: "work", Summary: "Work", Primary: true},
 			{ID: "personal", Summary: "Personal"},
 		},
 	}
 	m, _ := newTestModel(f)
 	m.calendars = f.calendars
-	m.isEnabled = map[string]bool{"work": true, "personal": true}
+	m.sel.Enabled = map[string]bool{"work": true, "personal": true}
 	m.picker = true
 
 	m.pickerIndex = 1
 	m = upd(t, m, msgKey("enter"))
-	if m.isEnabled["personal"] {
+	if m.sel.Enabled["personal"] {
 		t.Errorf("personal should be disabled after toggle")
 	}
 	m = upd(t, m, msgKey("t"))
-	if m.targetCalID != "personal" {
-		t.Errorf("target = %q, want personal", m.targetCalID)
+	if m.sel.Target != "personal" {
+		t.Errorf("target = %q, want personal", m.sel.Target)
 	}
-	if !m.isEnabled["work"] {
+	if !m.sel.Enabled["work"] {
 		t.Errorf("work should remain enabled")
 	}
 }
 
 func TestCreateGoesToTargetCalendar(t *testing.T) {
 	f := &fakeAPI{
-		calendars: []gcal.Calendar{{ID: "work", Summary: "Work", Primary: true}},
-		events:    []gcal.Event{},
+		calendars: []domain.Calendar{{ID: "work", Summary: "Work", Primary: true}},
+		events:    []domain.Event{},
 	}
 	m, _ := newTestModel(f)
 	m.calendars = f.calendars
-	m.targetCalID = "work"
+	m.sel.Target = "work"
 
 	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 40})
 	m = upd(t, m, msgKey("n"))
@@ -134,26 +135,26 @@ func TestStateRoundTrip(t *testing.T) {
 	path := t.TempDir() + "/state.json"
 
 	f := &fakeAPI{
-		calendars: []gcal.Calendar{
+		calendars: []domain.Calendar{
 			{ID: "work", Summary: "Work", Primary: true},
 			{ID: "personal", Summary: "Personal"},
 		},
 	}
-	m, _ := New(f)
+	m, _ := New(usecase.NewCalendarService(f))
 	m.SetStatePath(path)
 	m.calendars = f.calendars
-	m.isEnabled = map[string]bool{"work": true, "personal": false}
-	m.targetCalID = "personal"
+	m.sel.Enabled = map[string]bool{"work": true, "personal": false}
+	m.sel.Target = "personal"
 	m.saveState()
 
-	m2, _ := New(f)
+	m2, _ := New(usecase.NewCalendarService(f))
 	m2.SetStatePath(path)
 	m2.loadState()
 	m2.calendars = f.calendars
-	if !m2.isEnabled["work"] || m2.isEnabled["personal"] {
-		t.Errorf("enabled state not persisted: %v", m2.isEnabled)
+	if !m2.sel.Enabled["work"] || m2.sel.Enabled["personal"] {
+		t.Errorf("enabled state not persisted: %v", m2.sel.Enabled)
 	}
-	if m2.targetCalID != "personal" {
-		t.Errorf("target not persisted: %q", m2.targetCalID)
+	if m2.sel.Target != "personal" {
+		t.Errorf("target not persisted: %q", m2.sel.Target)
 	}
 }
