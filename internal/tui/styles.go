@@ -153,6 +153,13 @@ var (
 			Background(lipgloss.Color("58")).
 			Width(10)
 
+	gridEventCursor = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("202")).
+			Width(9).
+			PaddingLeft(1)
+
 	gridNow = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("39"))

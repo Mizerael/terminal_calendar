@@ -61,8 +61,21 @@ func (m *Model) renderStatus() string {
 	n := m.totalEvents()
 	day := m.focusedDay()
 	sel := fmt.Sprintf("%s %02d:00", weekDayLabel(m.dayIndex), m.focusedHour())
+	if ev := m.focusedEvent(); ev != nil {
+		sel = fmt.Sprintf("%s %02d:00 · %s", weekDayLabel(m.dayIndex), m.focusedHour(), eventShortTitle(ev))
+	}
 	s := fmt.Sprintf("%d events · %s · %s   %s", n, day.Format("Mon 02 Jan"), sel, weekKeysHint())
 	return truncate(s, m.width)
+}
+
+// eventShortTitle returns a short label for the focused event for the status
+// line, truncated so it does not crowd the hint.
+func eventShortTitle(e *gcal.Event) string {
+	text := e.Summary
+	if text == "" {
+		text = "(no title)"
+	}
+	return truncate(text, 24)
 }
 
 func weekKeysHint() string {

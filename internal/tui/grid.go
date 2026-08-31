@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -39,9 +40,11 @@ func (m *Model) colW() int {
 	return cw
 }
 
-// hourRange returns the half-open [start, end) hour span of a timed event in
-// its own local zone, clamped to the 24-hour day. ok is false for all-day
-// events or when times cannot be parsed.
+// hourRange returns the half-open [start, end) hour span of a timed event,
+// clamped to the 24-hour day. The end hour is inclusive of any sub-hour tail so
+// that a short event (e.g. a recurring 09:00-09:30) still fills its starting
+// hour row instead of becoming a zero-length, invisible block. ok is false for
+// all-day events or when times cannot be parsed.
 func hourRange(e *gcal.Event) (start, end int, ok bool) {
 	if e.AllDay() {
 		return 0, 0, false
@@ -54,14 +57,17 @@ func hourRange(e *gcal.Event) (start, end int, ok bool) {
 	if err != nil {
 		en = s.Add(time.Hour)
 	}
-	sh, eh := s.Hour(), en.Hour()
-	// A timed event that ends past midnight in local time spans to hour 24.
-	if en.After(s) && en.Day() != s.Day() && eh == 0 {
-		eh = 24
-	}
-	// Guard against zero-length or reversed events.
+	sh := s.Hour()
+	var eh int
 	if !en.After(s) {
+		// Zero-length or reversed: force a one-hour block.
 		eh = sh + 1
+	} else {
+		// End hour as minutes past the start's own midnight; ceil so a partial
+		// end (e.g. 09:30) occupies hour 9, while an exact hour boundary is
+		// exclusive. Values roll naturally past 24 for midnight-crossing events.
+		dayStart := time.Date(s.Year(), s.Month(), s.Day(), 0, 0, 0, 0, s.Location())
+		eh = int(math.Ceil(en.Sub(dayStart).Hours()))
 	}
 	if eh < sh {
 		eh = sh
@@ -255,25 +261,37 @@ type span struct {
 
 // renderHourCell renders the single cell at the given hour for a day.
 func (m *Model) renderHourCell(d, hour int, covering map[int][]*span, now time.Time, colW int) string {
-	isCursor := d == m.dayIndex && hour == m.focusedHour()
 	isNow := d == m.dayIndex && now.Hour() == hour && today().Equal(m.weekStart.AddDate(0, 0, d))
 	isWeekend := d >= 5
 
 	active := covering[hour]
 	if len(active) == 0 {
-		return m.renderEmptyCell(isCursor, isWeekend, isNow, colW)
+		// An empty cell is only highlighted when a real event is focused at
+		// this hour; otherwise (no selection) it stays plain, per the user.
+		return m.renderEmptyCell(m.emptyCellCursor(d, hour), isWeekend, isNow, colW)
 	}
 
 	// The first span active here; it is a block "top" only at its own start
 	// hour (where the title is shown), otherwise a continuation cell.
 	top := active[0]
 	cont := top.start < hour
+	isSel := d == m.dayIndex && top.idx == m.eventIndex
+
+	if isSel {
+		// The focused event: highlight the whole span distinctly so the
+		// selection is obvious regardless of which calendar it belongs to.
+		if cont {
+			return gridEventCont.Copy().Background(lipgloss.Color("237")).Width(colW).Render("")
+		}
+		full := focusedEventLabel(top.ev)
+		if len(active) > 1 {
+			full += " " + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(itoa(len(active))+"x")
+		}
+		full = truncate(full, colW)
+		return gridEventCursor.Copy().Width(colW).Render(full)
+	}
 
 	if cont {
-		// continuation of a block that started earlier
-		if isCursor {
-			return gridEventCont.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render("")
-		}
 		return gridEventCont.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render("")
 	}
 
@@ -286,11 +304,24 @@ func (m *Model) renderHourCell(d, hour int, covering map[int][]*span, now time.T
 		full += " " + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render(itoa(len(active))+"x")
 	}
 	full = truncate(full, colW)
-
-	if isCursor {
-		return gridEventTop.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render(full)
-	}
 	return gridEventTop.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render(full)
+}
+
+// focusedEventLabel prefixes the focused event's title with a pointer so the
+// selected row is unmistakable in a merged, color-coded grid.
+func focusedEventLabel(e *gcal.Event) string {
+	text := e.Summary
+	if text == "" {
+		text = "(no title)"
+	}
+	return "▸ " + text
+}
+
+// emptyCellCursor reports whether the free-hour cell at (d, hour) should be
+// painted with the focused highlight. This only happens when an actual event is
+// selected, so that an empty day/free hour is never falsely highlighted.
+func (m *Model) emptyCellCursor(d, hour int) bool {
+	return d == m.dayIndex && hour == m.focusedHour() && m.eventIndex >= 0
 }
 
 func (m *Model) renderEmptyCell(isCursor, isWeekend, isNow bool, colW int) string {

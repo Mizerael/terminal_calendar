@@ -563,6 +563,28 @@ func TestGridRender(t *testing.T) {
 	}
 }
 
+// TestGridRenderShortEvent ensures a short same-hour event (typical of a
+// recurring series, e.g. 09:00-09:30) is actually drawn in the grid rather
+// than vanishing as a zero-length block.
+func TestGridRenderShortEvent(t *testing.T) {
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	f := &fakeAPI{events: []gcal.Event{
+		{Summary: "Quick sync", Id: "a",
+			Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"},
+			End:   &gcal.EDT{DateTime: "2026-08-31T09:30:00Z"}},
+	}}
+	m, _ := newTestModel(f)
+	m.weekStart = mon
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 28})
+	m = load(t, m, f)
+	m.dayIndex = 0
+
+	grid := m.renderGrid()
+	if !strings.Contains(grid, "Quick sync") {
+		t.Errorf("short same-hour event should render; grid output:\n%s", grid)
+	}
+}
+
 // TestWeekRendersSmoke ensures View() does not panic for the week and popup
 // states (catching layout bugs) and produces non-empty output.
 func TestWeekRendersSmoke(t *testing.T) {
@@ -644,6 +666,66 @@ func TestHourRange(t *testing.T) {
 	}
 	if en != 24 {
 		t.Errorf("crossing event end hour = %d, want 24 (past local midnight)", en)
+	}
+}
+
+// TestHourRangeSameHour ensures a short event that ends mid-hour (common for
+// recurring series, e.g. a 09:00-09:30 standup) still fills its start-hour row
+// instead of becoming an invisible zero-length block.
+func TestHourRangeSameHour(t *testing.T) {
+	e := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T09:30:00Z"}}
+	s, en, ok := hourRange(e)
+	if !ok || s != 9 || en != 10 {
+		t.Errorf("hourRange = %d,%d,%v, want 9,10,true", s, en, ok)
+	}
+
+	// 09:00-10:30 spans two full rows.
+	e2 := &gcal.Event{Start: &gcal.EDT{DateTime: "2026-08-31T09:00:00Z"}, End: &gcal.EDT{DateTime: "2026-08-31T10:30:00Z"}}
+	s2, en2, ok2 := hourRange(e2)
+	if !ok2 || s2 != 9 || en2 != 11 {
+		t.Errorf("hourRange = %d,%d,%v, want 9,11,true", s2, en2, ok2)
+	}
+}
+
+// TestEmptyCellCursorRequiresSelection ensures the free-hour cell is only
+// highlighted when an actual event is selected, so an empty day/free hour is
+// never falsely painted with the cursor color.
+func TestEmptyCellCursorRequiresSelection(t *testing.T) {
+	m := &Model{dayIndex: 1, eventIndex: -1}
+	m.setCursorHour(12)
+
+	// No event selected -> never highlighted.
+	if m.emptyCellCursor(1, 12) {
+		t.Error("empty cell cursor should be off when no event is selected")
+	}
+
+	// A focused event does enable highlighting (the grid never draws it on an
+	// empty cell because the focused event occupies that hour, but guard the
+	// prerequisite).
+	m.eventIndex = 0
+	if !m.emptyCellCursor(1, 12) {
+		t.Error("empty cell cursor should be on when an event is focused")
+	}
+}
+
+// TestFocusedEventMarker ensures the selected event gets a distinct ▸ marker
+// in the grid so the selection is obvious in a merged view.
+func TestFocusedEventMarker(t *testing.T) {
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	f := &fakeAPI{events: []gcal.Event{
+		mkEvent("Standup", "a", 9, 0),
+		mkEvent("Other", "b", 14, 0),
+	}}
+	m, _ := newTestModel(f)
+	m.weekStart = mon
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = load(t, m, f)
+	m.dayIndex = 0
+	m.eventIndex = 0
+
+	grid := m.renderGrid()
+	if !strings.Contains(grid, "▸") {
+		t.Errorf("focused event should be marked with ▸ in the grid")
 	}
 }
 
