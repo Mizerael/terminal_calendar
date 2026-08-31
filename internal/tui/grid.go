@@ -18,19 +18,23 @@ const (
 	// gutterW is the width reserved for the leading hour-label column.
 	gutterW = 6
 
-	// colWMin/colWMax clamp each day column's width.
+	// rowBorderW is the width added by the vertical borders of the day cells
+	// across a single hour row (shared borders, not per column).
+	rowBorderW = 2
+
+	// colWMin is the smallest width each day column may have on a narrow
+	// terminal. There is no upper bound: columns stretch with the terminal so
+	// event titles get more room on wide screens.
 	colWMin = 8
-	colWMax = 16
 )
 
-// colW returns the width of each day column based on the terminal width.
+// colW returns the width of each day column based on the terminal width. It
+// leaves room for the hour gutter and the cells' shared borders so the grid
+// never overflows the terminal.
 func (m *Model) colW() int {
-	cw := (m.width - gutterW) / 7
+	cw := (m.width - gutterW - rowBorderW) / 7
 	if cw < colWMin {
 		cw = colWMin
-	}
-	if cw > colWMax {
-		cw = colWMax
 	}
 	return cw
 }
@@ -116,16 +120,32 @@ func (m *Model) renderGrid() string {
 	return strings.Join(append([]string{gridHeader, allDay}, body...), "\n")
 }
 
-// gridRows computes how many hour rows fit given the terminal height.
+// gridRows computes how many hour rows fit given the terminal height. The
+// grid stretches to fill the available space, but never more than the 24 hours
+// in a day.
 func (m *Model) gridRows() int {
-	avail := m.height - 4 // header + all-day + status line overhead
+	avail := m.height - m.gridOverhead()
 	if avail < 6 {
 		avail = 6
 	}
-	if avail > 20 {
-		avail = 20
+	if avail > 24 {
+		avail = 24
 	}
 	return avail
+}
+
+// gridOverhead is the number of fixed layout lines around the hour grid:
+// header, status line, and the all-day banner when present.
+func (m *Model) gridOverhead() int {
+	overhead := 2 // week header + status line
+	for d := 0; d < 7; d++ {
+		for i := range m.weekEvents[d] {
+			if m.weekEvents[d][i].AllDay() {
+				return overhead + 1
+			}
+		}
+	}
+	return overhead
 }
 
 // effectiveRows clamps the available rows to the remaining hours of the day so

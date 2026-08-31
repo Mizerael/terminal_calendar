@@ -39,9 +39,13 @@ func (m *Model) renderHeader() string {
 		right = "synced " + m.lastSync.Format("15:04:05") + "  ◄ [ week ] ►"
 	}
 	titleStr := titleStyle.SetString(title).Render()
+	spacer := m.width - lipgloss.Width(titleStr) - lipgloss.Width(right) - 2
+	if spacer < 1 {
+		spacer = 1
+	}
 	row := lipgloss.JoinHorizontal(lipgloss.Center,
 		titleStr,
-		lipgloss.NewStyle().Width(m.width-80).Render(""),
+		lipgloss.NewStyle().Width(spacer).Render(""),
 		subtle.Render(right),
 	)
 	return lipgloss.JoinVertical(lipgloss.Left, row)
@@ -57,11 +61,12 @@ func (m *Model) renderStatus() string {
 	n := m.totalEvents()
 	day := m.focusedDay()
 	sel := fmt.Sprintf("%s %02d:00", weekDayLabel(m.dayIndex), m.focusedHour())
-	return fmt.Sprintf("%d events · %s · %s   %s", n, day.Format("Mon 02 Jan"), sel, weekKeysHint())
+	s := fmt.Sprintf("%d events · %s · %s   %s", n, day.Format("Mon 02 Jan"), sel, weekKeysHint())
+	return truncate(s, m.width)
 }
 
 func weekKeysHint() string {
-	return "[j/k event] [h/l day] [ctrl+u/ctrl+d scroll] [</> week] [enter detail] [n new] [e edit] [d delete] [t today] [?] [q quit]"
+	return "[j/k ev] [h/l day] [^u/^d scroll] [</> week] [enter] [n new] [e edit] [d del] [t] [?] [q]"
 }
 
 func weekDayLabel(idx int) string {

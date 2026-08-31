@@ -153,6 +153,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.loaded {
+			m.ensureVisible(m.effectiveRows())
+		}
 
 	case tea.KeyMsg:
 		switch {

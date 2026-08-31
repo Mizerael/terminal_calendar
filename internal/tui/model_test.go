@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"gitnub.com/Mizerael/terminal_calendar/internal/gcal"
 )
@@ -633,8 +634,56 @@ func TestColWidth(t *testing.T) {
 		t.Errorf("colW(40) = %d, want 8 (clamped to min)", got)
 	}
 	m.width = 200
-	if got := m.colW(); got != 16 {
-		t.Errorf("colW(200) = %d, want 16 (clamped to max)", got)
+	if got := m.colW(); got != 27 {
+		t.Errorf("colW(200) = %d, want 27 (stretches with width)", got)
+	}
+}
+
+func TestWindowResizeFillsTerminal(t *testing.T) {
+	m, _ := newTestModel(&fakeAPI{events: []gcal.Event{mkEvent("A", "a", 9, 0)}})
+
+	// small terminal
+	m = upd(t, m, tea.WindowSizeMsg{Width: 40, Height: 12})
+	if got := m.effectiveRows(); got > 24 || got < 1 {
+		t.Errorf("effectiveRows on small terminal = %d, want within [1,24]", got)
+	}
+	if got := m.colW(); got < colWMin {
+		t.Errorf("colW on small terminal = %d, want >= %d", got, colWMin)
+	}
+
+	// large terminal: grid should stretch (more rows, wider columns)
+	m = upd(t, m, tea.WindowSizeMsg{Width: 200, Height: 60})
+	// gridRows (capacity) is capped at the 24 hours of a day
+	if got := m.gridRows(); got != 24 {
+		t.Errorf("gridRows on tall terminal = %d, want 24", got)
+	}
+	// the visible window follows scrollHour + remaining hours
+	// (default scrollHour=6 => hours 6..23, i.e. 18 rows)
+	if got, want := m.effectiveRows(), 24-m.scrollHour; got != want {
+		t.Errorf("effectiveRows on tall terminal = %d, want %d", got, want)
+	}
+	// columns stretch with width
+	if got := m.colW(); got != 27 {
+		t.Errorf("colW on wide terminal = %d, want 27", got)
+	}
+}
+
+func TestResizeKeepsFocusVisible(t *testing.T) {
+	m, _ := newTestModel(&fakeAPI{events: []gcal.Event{mkEvent("late", "a", 22, 0)}})
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 60})
+	m = load(t, m, &fakeAPI{events: []gcal.Event{mkEvent("late", "a", 22, 0)}})
+	m.dayIndex, m.eventIndex = 0, 0
+
+	// On a tall window all 24 hours fit, focus hour 22 is visible.
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 60})
+	if h := m.focusedHour(); h != 22 {
+		t.Fatalf("focusedHour = %d, want 22", h)
+	}
+	// On a short window scrollHour should shift so hour 22 stays visible.
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 12})
+	rows := m.effectiveRows()
+	if !(m.scrollHour <= 22 && 22 < m.scrollHour+rows) {
+		t.Errorf("focus hour 22 not within window [%d,%d)", m.scrollHour, m.scrollHour+rows)
 	}
 }
 
@@ -704,5 +753,32 @@ func TestGridNavigationByEvent(t *testing.T) {
 	m = upd(t, m, msgKey("j"))
 	if m.dayIndex != 2 || m.eventIndex != 0 || m.focusedHour() != 23 {
 		t.Fatalf("after jj: %d,%d hour=%d want 2,0 hour=23", m.dayIndex, m.eventIndex, m.focusedHour())
+	}
+}
+
+// TestResizeRenderDoesNotPanicOrOverflow renders the grid at several terminal
+// sizes and ensures it never panics nor produces content wider than the
+// available width.
+func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
+	mon := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local)
+	f := &fakeAPI{events: []gcal.Event{
+		mkEvent("Standup morning", "a", 9, 0),
+		mkEvent("Afternoon review", "b", 14, 0),
+		{Summary: "Holiday", Id: "c", Start: &gcal.EDT{Date: "2026-09-01"}, End: &gcal.EDT{Date: "2026-09-01"}},
+	}}
+	for _, sz := range [][2]int{{80, 20}, {100, 24}, {160, 40}, {220, 50}} {
+		m, _ := newTestModel(f)
+		m.weekStart = mon
+		m = upd(t, m, tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
+		m = load(t, m, f)
+		v := m.View()
+		if v == "" {
+			t.Fatalf("size %dx%d: empty view", sz[0], sz[1])
+		}
+		for _, line := range strings.Split(v, "\n") {
+			if w := lipgloss.Width(line); w > sz[0] {
+				t.Errorf("size %dx%d: line width %d exceeds terminal width", sz[0], sz[1], w)
+			}
+		}
 	}
 }
