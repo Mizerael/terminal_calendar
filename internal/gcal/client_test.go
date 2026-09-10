@@ -277,3 +277,54 @@ func TestListEventsRangeInTagsCalendar(t *testing.T) {
 		t.Errorf("event not tagged with calendar: %+v", evs[0])
 	}
 }
+
+func TestRecurrenceToAPIEvent(t *testing.T) {
+	rrule := "RRULE:FREQ=WEEKLY;COUNT=5"
+	event := domain.Event{
+		TimeZone:   "Europe/Saratov",
+		Start:      time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC),
+		End:        time.Date(1999, 1, 1, 23, 59, 59, 0, time.UTC),
+		Recurrence: []string{rrule},
+	}
+	converted := toAPIEvent(&event)
+	if !strings.Contains(converted.Start.DateTime, "T00:00:00") {
+		t.Errorf("%v expected time: 00:00:00", converted.Start.DateTime)
+	}
+	if !strings.Contains(converted.End.DateTime, "T23:59:59") {
+		t.Errorf("%v expected time: 23:59:59", converted.End.DateTime)
+	}
+	if len(converted.Recurrence) != 1 {
+		t.Errorf("%v expected [%v]", converted.Recurrence, rrule)
+	}
+	if strings.Contains(converted.Start.DateTime, "Z") || converted.Start.TimeZone != "Europe/Saratov" {
+		t.Errorf("%q, %q expected non-empty TimeZone ", converted.Start.DateTime, converted.Start.TimeZone)
+	}
+
+	alldayEvent := domain.Event{
+		AllDay:     true,
+		Start:      time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC),
+		End:        time.Date(1999, 1, 1, 23, 59, 59, 0, time.UTC),
+		Recurrence: []string{rrule},
+	}
+	alldayConverted := toAPIEvent(&alldayEvent)
+
+	if len(alldayConverted.Recurrence) != 1 {
+		t.Errorf("%v expected [%v]", alldayConverted.Recurrence, rrule)
+	}
+
+	withoutTimezoneEvent := domain.Event{
+		TimeZone:   "",
+		Start:      time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC),
+		End:        time.Date(1999, 1, 1, 23, 59, 59, 0, time.UTC),
+		Recurrence: []string{rrule},
+	}
+	withoutTimezoneConverted := toAPIEvent(&withoutTimezoneEvent)
+
+	if withoutTimezoneConverted.Start.TimeZone != "" {
+		t.Errorf("expected empty timeZone, got %q", withoutTimezoneConverted.Start.TimeZone)
+	}
+	if strings.HasSuffix(withoutTimezoneConverted.Start.DateTime, "T00:00:00") {
+		t.Errorf("expected RFC3339 offset, got %q", withoutTimezoneConverted.Start.DateTime)
+	}
+
+}

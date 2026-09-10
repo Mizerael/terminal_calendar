@@ -68,6 +68,26 @@ func (f *fakeAPI) DeleteEventIn(ctx context.Context, calID, id string) error {
 	return nil
 }
 
+func (f *fakeAPI) CreateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) UpdateSeries(ctx context.Context, calID string, E *domain.Event) (*domain.Event, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) DeleteSeries(ctx context.Context, calID, id string) error {
+	return nil
+}
+
+func (f *fakeAPI) UpsertInstance(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) CancelInstance(ctx context.Context, calID, instanceID string) error {
+	return nil
+}
+
 // makeEvent builds a timed event anchored to 2026-08-31 (a Monday) at the
 // given UTC hour/min.
 func makeEvent(summary, id string, h, m int) domain.Event {
@@ -891,22 +911,61 @@ func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
 	}
 }
 
-func (f *fakeAPI) CreateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
-	return nil, nil
+func TestCreateEventWithRecurrence(t *testing.T) {
+	t.Setenv("TZ", "Europe/Saratov")
+	f := &fakeAPI{}
+	m, _ := newTestModel(f)
+	m.weekStart = time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+
+	m = upd(t, m, msgKey("n"))
+	m.form.inputs[fieldTitle].SetValue("Standup")
+	m.form.inputs[fieldStartDate].SetValue("2026-09-01")
+	m.form.inputs[fieldStartTime].SetValue("10:30")
+	m.form.inputs[fieldEndDate].SetValue("2026-09-01")
+	m.form.inputs[fieldEndTime].SetValue("11:00")
+
+	m.form.focus = int(fieldRepeat)
+	m = upd(t, m, msgKey("enter")) // пикер открыт, index=0 (None)
+	m = upd(t, m, msgKey("j"))     // None → Daily
+	m = upd(t, m, msgKey("l"))     // count 0→1
+	m = upd(t, m, msgKey("l"))     // 1→2
+	m = upd(t, m, msgKey("l"))     // 2→3
+	m = upd(t, m, msgKey("l"))     // 3→4
+	m = upd(t, m, msgKey("l"))     // 4→5  → RRULE:FREQ=DAILY;COUNT=5
+	m = run(t, m, msgKey("enter")) // применить → фокус на Title
+	m = run(t, m, msgKey("enter")) // сохранить
+
+	if len(f.created) != 1 {
+		t.Fatalf("want 1 created, got %d", len(f.created))
+	}
+	got := f.created[0].Recurrence
+	if len(got) != 1 || got[0] != "RRULE:FREQ=DAILY;COUNT=5" {
+		t.Errorf("Recurrence = %v, want [RRULE:FREQ=DAILY;COUNT=5]", got)
+	}
 }
 
-func (f *fakeAPI) UpdateSeries(ctx context.Context, calID string, E *domain.Event) (*domain.Event, error) {
-	return nil, nil
-}
+func TestEditCancelsRecurrence(t *testing.T) {
+	t.Setenv("TZ", "Europe/Saratov")
+	ev := makeEvent("R", "e1", 9, 0)
+	ev.Recurrence = []string{"RRULE:FREQ=WEEKLY;COUNT=5"}
+	f := &fakeAPI{events: []domain.Event{ev}}
+	m, _ := newTestModel(f)
+	m.weekStart = time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	m = load(t, m, f)
 
-func (f *fakeAPI) DeleteSeries(ctx context.Context, calID, id string) error {
-	return nil
-}
+	m = run(t, m, msgKey("e")) // edit mode; setEvent распарсил rule → recurFreq=Weekly
+	m.form.focus = int(fieldRepeat)
+	m = upd(t, m, msgKey("enter")) // пикер, index = int(recurWeekly) = 2
+	m = upd(t, m, msgKey("k"))     // 2→1
+	m = upd(t, m, msgKey("k"))     // 1→0 (None)
+	m = run(t, m, msgKey("enter")) // применить + сохранить
+	m = run(t, m, msgKey("enter")) // сохранить
 
-func (f *fakeAPI) UpsertInstance(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
-	return nil, nil
-}
-
-func (f *fakeAPI) CancelInstance(ctx context.Context, calID, instanceID string) error {
-	return nil
+	if len(f.updated) != 1 {
+		t.Fatalf("want 1 update, got %d", len(f.updated))
+	}
+	r := f.updated[0].Recurrence
+	if r == nil || len(r) != 0 {
+		t.Errorf("Recurrence = %#v, want []string{} (NOT nil)", r)
+	}
 }
