@@ -87,6 +87,10 @@ type Model struct {
 	picker      bool
 	pickerIndex int
 	pickerErr   error
+
+	recurrencePicker      bool
+	recurrencePickerIndex int
+	recurrencePickerCount int
 }
 
 // New builds the model with a disposed calendar selection and starts loading.
@@ -177,6 +181,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch {
+		case m.recurrencePicker:
+			return m.updateRecurrencePicker(msg)
 		case m.screen == screenForm:
 			return m.updateForm(msg)
 		case m.screen == screenConfirm:
@@ -567,6 +573,12 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		if m.form.focused() == fieldRepeat {
+			m.recurrencePicker = true
+			m.recurrencePickerIndex = int(m.form.recurFreq)
+			m.recurrencePickerCount = m.form.recurCount
+			return m, nil
+		}
 		m.form.err = ""
 		ev, err := m.form.buildEvent()
 		if err == errValidation {
@@ -619,7 +631,11 @@ func (m *Model) View() string {
 	}
 	switch m.screen {
 	case screenForm:
-		return m.form.render(m.width, m.height)
+		v := m.form.render(m.width, m.height)
+		if m.recurrencePicker {
+			return overlay(v, m.renderRecurrencePicker(), m.width, m.height)
+		}
+		return v
 	case screenConfirm:
 		return m.renderConfirm()
 	default:

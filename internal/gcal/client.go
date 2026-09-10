@@ -406,6 +406,16 @@ func toAPIEvent(e *domain.Event) *calendar.Event {
 	}
 	out.Start = &calendar.EventDateTime{DateTime: e.Start.Format(layout), TimeZone: e.TimeZone}
 	out.End = &calendar.EventDateTime{DateTime: e.EndTime().Format(layout), TimeZone: e.TimeZone}
+
+	out.Recurrence = e.Recurrence
+	if !e.OriginalStartTime.IsZero() {
+		if e.AllDay {
+			out.OriginalStartTime = &calendar.EventDateTime{Date: e.OriginalStartTime.Format("2006-01-02")}
+		} else {
+			out.OriginalStartTime = &calendar.EventDateTime{DateTime: e.OriginalStartTime.Format(time.RFC3339)}
+		}
+	}
+
 	return out
 }
 
@@ -453,6 +463,22 @@ func fromAPIEvent(e *calendar.Event) *domain.Event {
 			out.End = out.Start
 		}
 	}
+
+	out.Recurrence = e.Recurrence
+	if e.OriginalStartTime != nil {
+		if e.OriginalStartTime.DateTime != "" {
+			if t, err := time.Parse(time.RFC3339, e.OriginalStartTime.DateTime); err == nil {
+				out.OriginalStartTime = t
+			}
+		}
+		if out.OriginalStartTime.IsZero() && e.OriginalStartTime.Date != "" {
+			if t, err := time.Parse("2006-01-02", e.OriginalStartTime.Date); err == nil {
+				out.OriginalStartTime = t
+			}
+		}
+
+	}
+
 	return out
 }
 

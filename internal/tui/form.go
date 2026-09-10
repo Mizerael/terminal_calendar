@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ const (
 	fieldEndDate
 	fieldEndTime
 	fieldDescription
+	fieldRepeat
 	fieldCount
 )
 
@@ -33,7 +35,9 @@ type form struct {
 	// editing is non-nil when we edit an existing event.
 	editing *domain.Event
 	// error line shown when validation fails.
-	err string
+	err        string
+	recurFreq  recurrenceFreq
+	recurCount int
 }
 
 func newForm() *form {
@@ -45,6 +49,7 @@ func newForm() *form {
 		fieldEndDate:     "End date",
 		fieldEndTime:     "End time",
 		fieldDescription: "Description",
+		fieldRepeat:      "Repeat",
 	}
 	f := &form{labels: labels}
 	for i := 0; i < int(fieldCount); i++ {
@@ -74,6 +79,8 @@ func placeholder(id fieldID) string {
 		return "HH:MM"
 	case fieldDescription:
 		return "Meeting notes…"
+	case fieldRepeat:
+		return "Repeat rule"
 	}
 	return ""
 }
@@ -92,6 +99,9 @@ func (f *form) reset(defaultDate time.Time) {
 		f.inputs[fieldStartDate].SetValue(defaultDate.Format("2006-01-02"))
 	}
 	f.inputs[fieldTitle].Focus()
+
+	f.recurFreq = recurNone
+	f.recurCount = 0
 }
 
 func (f *form) setEvent(e *domain.Event) {
@@ -113,6 +123,12 @@ func (f *form) setEvent(e *domain.Event) {
 	f.inputs[fieldEndDate].SetValue(formatDate(end))
 	if e.Description != "" {
 		f.inputs[fieldDescription].SetValue(e.Description)
+	}
+	f.inputs[fieldRepeat].SetValue("")
+	if len(e.Recurrence) > 0 {
+		f.recurFreq, f.recurCount = parseRecurrenceRRule(e.Recurrence[0])
+	} else {
+		f.recurFreq, f.recurCount = recurNone, 0
 	}
 }
 
@@ -240,6 +256,11 @@ func (f *form) buildEvent() (*domain.Event, error) {
 
 	ev.Start = start
 	ev.End = end
+
+	if rr := buildRecurrenceRRule(f.recurFreq, f.recurCount); rr != "" {
+		ev.Recurrence = []string{rr}
+	}
+
 	return ev, nil
 }
 
@@ -284,6 +305,17 @@ func (f *form) title() string {
 		return "Edit event"
 	}
 	return "New event"
+}
+
+func (f *form) repeatSummary() string {
+	if f.recurFreq == recurNone {
+		return subtle.Render("none")
+	}
+	repeat_label := recurrenceOptions[f.recurFreq].label
+	if f.recurCount > 0 {
+		return repeat_label + ", " + strconv.Itoa(f.recurCount) + " times"
+	}
+	return repeat_label + ", forever"
 }
 
 // render draws the form centered on the screen.

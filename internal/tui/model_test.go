@@ -890,3 +890,23 @@ func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
 		}
 	}
 }
+
+func (f *fakeAPI) CreateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) UpdateSeries(ctx context.Context, calID string, E *domain.Event) (*domain.Event, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) DeleteSeries(ctx context.Context, calID, id string) error {
+	return nil
+}
+
+func (f *fakeAPI) UpsertInstance(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) CancelInstance(ctx context.Context, calID, instanceID string) error {
+	return nil
+}

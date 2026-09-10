@@ -18,14 +18,17 @@ type Calendar struct {
 // full-day event Start/End hold the inclusive start / exclusive end dates at
 // local midnight and AllDay is true.
 type Event struct {
-	ID               string
-	Summary          string
-	Location         string
-	Description      string
-	RecurringEventID string
+	ID          string
+	Summary     string
+	Location    string
+	Description string
 
-	Start time.Time
-	End   time.Time
+	RecurringEventID string
+	Recurrence       []string
+
+	OriginalStartTime time.Time
+	Start             time.Time
+	End               time.Time
 	// AllDay marks a date-only (full-day) event.
 	AllDay bool
 	// TimeZone is the IANA zone name attached to the event when known, kept so
