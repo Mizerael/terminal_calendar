@@ -340,6 +340,9 @@ func (c *Client) CreateEvent(ctx context.Context, e *domain.Event) (*domain.Even
 
 // CreateEventIn inserts a new event into the given calendar.
 func (c *Client) CreateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
+	if len(e.Recurrence) > 0 && e.TimeZone == "" {
+		return nil, errors.New("recurring events require a timezone")
+	}
 	api := toAPIEvent(e)
 	res, err := c.svc.Events.Insert(calID, api).Context(ctx).Do()
 	if err != nil {
@@ -359,6 +362,9 @@ func (c *Client) UpdateEvent(ctx context.Context, e *domain.Event) (*domain.Even
 func (c *Client) UpdateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
 	if e.ID == "" {
 		return nil, errors.New("event has no id")
+	}
+	if len(e.Recurrence) > 0 && e.TimeZone == "" {
+		return nil, errors.New("recurring events require a timezone")
 	}
 	api := toAPIEvent(e)
 	res, err := c.svc.Events.Update(calID, e.ID, api).Context(ctx).Do()
@@ -394,19 +400,31 @@ func toAPIEvent(e *domain.Event) *calendar.Event {
 		Location:         e.Location,
 		Description:      e.Description,
 		RecurringEventId: e.RecurringEventID,
-	}
-	if e.AllDay {
-		out.Start = &calendar.EventDateTime{Date: e.Start.Format("2006-01-02"), TimeZone: e.TimeZone}
-		out.End = &calendar.EventDateTime{Date: e.EndTime().Format("2006-01-02"), TimeZone: e.TimeZone}
-		return out
+		Recurrence:       e.Recurrence,
 	}
 	layout := "2006-01-02T15:04:05" // timezone carried by the timeZone field
 	if e.TimeZone == "" {
 		layout = time.RFC3339 // no timeZone: embed the offset in dateTime
 	}
-	out.Start = &calendar.EventDateTime{DateTime: e.Start.Format(layout), TimeZone: e.TimeZone}
-	out.End = &calendar.EventDateTime{DateTime: e.EndTime().Format(layout), TimeZone: e.TimeZone}
+	out.Start = apiTime(e.Start, e.AllDay, layout, e.TimeZone)
+	out.End = apiTime(e.EndTime(), e.AllDay, layout, e.TimeZone)
+
+	if !e.OriginalStartTime.IsZero() {
+		if e.AllDay {
+			out.OriginalStartTime = &calendar.EventDateTime{Date: e.OriginalStartTime.Format("2006-01-02")}
+		} else {
+			out.OriginalStartTime = &calendar.EventDateTime{DateTime: e.OriginalStartTime.Format(time.RFC3339)}
+		}
+	}
+
 	return out
+}
+
+func apiTime(t time.Time, allDay bool, layout, tz string) *calendar.EventDateTime {
+	if allDay {
+		return &calendar.EventDateTime{Date: t.Format("2006-01-02"), TimeZone: tz}
+	}
+	return &calendar.EventDateTime{DateTime: t.Format(layout), TimeZone: tz}
 }
 
 // fromAPIEvent converts a Google Calendar API event to a domain event, parsing
@@ -453,6 +471,22 @@ func fromAPIEvent(e *calendar.Event) *domain.Event {
 			out.End = out.Start
 		}
 	}
+
+	out.Recurrence = e.Recurrence
+	if e.OriginalStartTime != nil {
+		if e.OriginalStartTime.DateTime != "" {
+			if t, err := time.Parse(time.RFC3339, e.OriginalStartTime.DateTime); err == nil {
+				out.OriginalStartTime = t
+			}
+		}
+		if out.OriginalStartTime.IsZero() && e.OriginalStartTime.Date != "" {
+			if t, err := time.Parse("2006-01-02", e.OriginalStartTime.Date); err == nil {
+				out.OriginalStartTime = t
+			}
+		}
+
+	}
+
 	return out
 }
 

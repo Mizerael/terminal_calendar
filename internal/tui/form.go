@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ const (
 	fieldEndDate
 	fieldEndTime
 	fieldDescription
+	fieldRepeat
 	fieldCount
 )
 
@@ -33,7 +35,9 @@ type form struct {
 	// editing is non-nil when we edit an existing event.
 	editing *domain.Event
 	// error line shown when validation fails.
-	err string
+	err        string
+	recurFreq  recurrenceFreq
+	recurCount int
 }
 
 func newForm() *form {
@@ -45,6 +49,7 @@ func newForm() *form {
 		fieldEndDate:     "End date",
 		fieldEndTime:     "End time",
 		fieldDescription: "Description",
+		fieldRepeat:      "Repeat",
 	}
 	f := &form{labels: labels}
 	for i := 0; i < int(fieldCount); i++ {
@@ -74,6 +79,8 @@ func placeholder(id fieldID) string {
 		return "HH:MM"
 	case fieldDescription:
 		return "Meeting notes…"
+	case fieldRepeat:
+		return "Repeat rule"
 	}
 	return ""
 }
@@ -92,6 +99,9 @@ func (f *form) reset(defaultDate time.Time) {
 		f.inputs[fieldStartDate].SetValue(defaultDate.Format("2006-01-02"))
 	}
 	f.inputs[fieldTitle].Focus()
+
+	f.recurFreq = recurNone
+	f.recurCount = 0
 }
 
 func (f *form) setEvent(e *domain.Event) {
@@ -113,6 +123,11 @@ func (f *form) setEvent(e *domain.Event) {
 	f.inputs[fieldEndDate].SetValue(formatDate(end))
 	if e.Description != "" {
 		f.inputs[fieldDescription].SetValue(e.Description)
+	}
+	if len(e.Recurrence) > 0 {
+		f.recurFreq, f.recurCount = parseRecurrenceRRule(e.Recurrence[0])
+	} else {
+		f.recurFreq, f.recurCount = recurNone, 0
 	}
 }
 
@@ -184,6 +199,9 @@ func (f *form) buildEvent() (*domain.Event, error) {
 		ev.ID = f.editing.ID
 		ev.CalendarID = f.editing.CalendarID
 		ev.CalendarSummary = f.editing.CalendarSummary
+		if len(f.editing.Recurrence) > 0 {
+			ev.Recurrence = []string{}
+		}
 	}
 	ev.Summary = title
 	if loc := f.value(fieldLocation); loc != "" {
@@ -205,6 +223,12 @@ func (f *form) buildEvent() (*domain.Event, error) {
 	}
 	ev.TimeZone = tzName
 
+	if rr := buildRecurrenceRRule(f.recurFreq, f.recurCount); rr != "" {
+		if tzName == "" {
+			return nil, f.fail("repeats require timezone")
+		}
+		ev.Recurrence = []string{rr}
+	}
 	if allDay {
 		ev.AllDay = true
 		ev.Start = sd
@@ -240,6 +264,7 @@ func (f *form) buildEvent() (*domain.Event, error) {
 
 	ev.Start = start
 	ev.End = end
+
 	return ev, nil
 }
 
@@ -286,6 +311,17 @@ func (f *form) title() string {
 	return "New event"
 }
 
+func (f *form) repeatSummary() string {
+	if f.recurFreq == recurNone {
+		return subtle.Render("none")
+	}
+	repeat_label := recurrenceOptions[f.recurFreq].label
+	if f.recurCount > 0 {
+		return repeat_label + ", " + strconv.Itoa(f.recurCount) + " times"
+	}
+	return repeat_label + ", forever"
+}
+
 // render draws the form centered on the screen.
 func (f *form) render(w, h int) string {
 	var b strings.Builder
@@ -293,9 +329,18 @@ func (f *form) render(w, h int) string {
 
 	rows := make([]string, 0, int(fieldCount)+2)
 	for i := 0; i < int(fieldCount); i++ {
-		id := fieldID(i)
-		value := f.inputs[i].View()
+		var value string
 		var row string
+
+		id := fieldID(i)
+
+		switch id {
+		case fieldRepeat:
+			value = f.repeatSummary()
+		default:
+			value = f.inputs[i].View()
+		}
+
 		if i == f.focus {
 			row = formFocusLabel.Render(f.labels[id]) + " " + value
 		} else {

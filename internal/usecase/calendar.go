@@ -21,6 +21,11 @@ type CalendarGateway interface {
 	CreateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
 	UpdateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
 	DeleteEventIn(ctx context.Context, calID, id string) error
+	CreateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
+	UpdateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
+	DeleteSeries(ctx context.Context, calID, id string) error
+	UpsertInstance(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
+	CancelInstance(ctx context.Context, calID, instanceID string) error
 }
 
 // CalendarService implements the calendar use cases the UI drives: loading
@@ -41,7 +46,7 @@ func (s *CalendarService) LoadCalendars(ctx context.Context) ([]domain.Calendar,
 }
 
 // LoadWeek fetches events for every enabled calendar overlapping
-// [weekStart, weekStart+7d) and merges them into a single flat list. It stops
+// [weekStart, weekStart+7d) and merges them int  o a single flat list. It stops
 // at the first calendar that errors.
 func (s *CalendarService) LoadWeek(ctx context.Context, weekStart time.Time, enabled map[string]bool) ([]domain.Event, error) {
 	end := weekStart.Add(7 * 24 * time.Hour)
