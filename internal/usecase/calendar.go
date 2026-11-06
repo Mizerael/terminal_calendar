@@ -21,6 +21,7 @@ type CalendarGateway interface {
 	CreateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
 	UpdateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
 	DeleteEventIn(ctx context.Context, calID, id string) error
+	GetEventIn(ctx context.Context, calID, eventID string) (*domain.Event, error)
 	CreateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
 	UpdateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error)
 	DeleteSeries(ctx context.Context, calID, id string) error
@@ -67,6 +68,11 @@ func (s *CalendarService) LoadWeek(ctx context.Context, weekStart time.Time, ena
 // Create creates a new event in the given calendar.
 func (s *CalendarService) Create(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
 	return s.gw.CreateEventIn(ctx, calID, e)
+}
+
+// GetIn fetches a single event by ID from a specific calendar.
+func (s *CalendarService) GetIn(ctx context.Context, calID, eventID string) (*domain.Event, error) {
+	return s.gw.GetEventIn(ctx, calID, eventID)
 }
 
 // Update updates an existing event, routing to the calendar that owns it
