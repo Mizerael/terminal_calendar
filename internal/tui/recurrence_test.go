@@ -42,6 +42,8 @@ func TestParseRecurrenceRRule(t *testing.T) {
 		{"daily@5", "RRULE:FREQ=DAILY;COUNT=5", recurDaily, 5},
 		{"week@forever", "RRULE:FREQ=WEEKLY", recurWeekly, 0},
 		{"trash", "RRULE:FREQ=ABOBA", recurNone, 0},
+		{"malformed", "RRULE:FREQ;COUNT=x", recurNone, 0},
+		{"case and whitespace", "rrule:freq=weekly; count=3", recurWeekly, 3},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -60,6 +60,7 @@ func (m *Model) updateRecurrencePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.form.recurFreq = recurrenceOptions[m.recurrencePickerIndex].freq
 		m.form.recurCount = m.recurrencePickerCount
+		m.form.recurrenceChanged = true
 		m.form.next()
 		m.recurrencePicker = false
 	}
@@ -116,10 +117,13 @@ func parseRecurrenceRRule(rrule string) (recurrenceFreq, int) {
 	freq := recurNone
 	count := 0
 	for _, rule := range rrules {
-		type_value := strings.SplitN(rule, "=", 2)
-		switch type_value[0] {
+		parts := strings.SplitN(strings.TrimSpace(rule), "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		switch strings.ToUpper(parts[0]) {
 		case "FREQ":
-			switch type_value[1] {
+			switch strings.ToUpper(parts[1]) {
 			case "DAILY":
 				freq = recurDaily
 			case "WEEKLY":
@@ -130,11 +134,10 @@ func parseRecurrenceRRule(rrule string) (recurrenceFreq, int) {
 				freq = recurYearly
 			}
 		case "COUNT":
-			n, err := strconv.Atoi(type_value[1])
-			if err != nil {
-				n = 0
+			n, err := strconv.Atoi(parts[1])
+			if err == nil && n > 0 {
+				count = n
 			}
-			count = n
 		}
 	}
 	return freq, count

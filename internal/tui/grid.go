@@ -39,6 +39,20 @@ func (m *Model) colW() int {
 	return cw
 }
 
+// dayColW distributes the space available after the hour gutter across the
+// seven day columns. A remainder is assigned from Monday onward.
+func (m *Model) dayColW(day int) int {
+	usable := m.width - gutterW - rowBorderW
+	if usable <= 0 {
+		usable = 7 * colWMin
+	}
+	base, remainder := usable/7, usable%7
+	if day < remainder {
+		return base + 1
+	}
+	return base
+}
+
 // hourRange delegates the pure hour-span of a timed event to the domain.
 func hourRange(e *domain.Event) (start, end int, ok bool) {
 	return domain.HourRange(e)
@@ -50,18 +64,16 @@ func hourRange(e *domain.Event) (start, end int, ok bool) {
 // [scrollHour, scrollHour+rows) is rendered.
 func (m *Model) renderGrid() string {
 	rows := m.effectiveRows()
-	cw := m.colW()
-
 	// Header row: blank gutter + one cell per day.
 	var header []string
 	header = append(header, gridGutter.Render("     "))
 	for d := 0; d < 7; d++ {
-		header = append(header, m.renderDayHeaderCell(d, cw))
+		header = append(header, m.renderDayHeaderCell(d, m.dayColW(d)))
 	}
 	gridHeader := lipgloss.JoinHorizontal(lipgloss.Top, header...)
 
 	// All-day banner row (above the hour grid).
-	allDay := m.renderAllDayRow(cw)
+	allDay := m.renderAllDayRow()
 	if allDay != "" {
 		allDay += "\n"
 	}
@@ -69,7 +81,7 @@ func (m *Model) renderGrid() string {
 	// Build each day column into a slice of per-hour rendered strings.
 	var cols [7][]string
 	for d := 0; d < 7; d++ {
-		cols[d] = m.buildDayColumn(d, rows, m.scrollHour, cw)
+		cols[d] = m.buildDayColumn(d, rows, m.scrollHour, m.dayColW(d))
 	}
 
 	var body []string
@@ -151,10 +163,11 @@ func (m *Model) renderDayHeaderCell(d, colW int) string {
 }
 
 // renderAllDayRow builds a single row of all-day events, one cell per day.
-func (m *Model) renderAllDayRow(colW int) string {
+func (m *Model) renderAllDayRow() string {
 	var cells []string
 	any := false
 	for d := 0; d < 7; d++ {
+		colW := m.dayColW(d)
 		var names []string
 		for i := range m.weekEvents[d] {
 			e := &m.weekEvents[d][i]

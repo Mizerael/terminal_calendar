@@ -911,6 +911,31 @@ func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
 	}
 }
 
+func TestDayColumnWidthsFillAvailableGridWidth(t *testing.T) {
+	for _, width := range []int{40, 80, 101, 160} {
+		m := &Model{width: width}
+		cols := 0
+		minWidth, maxWidth := int(^uint(0)>>1), 0
+		for d := 0; d < 7; d++ {
+			w := m.dayColW(d)
+			cols += w
+			if w < minWidth {
+				minWidth = w
+			}
+			if w > maxWidth {
+				maxWidth = w
+			}
+		}
+		want := width - gutterW - rowBorderW
+		if cols != want {
+			t.Errorf("width %d: day columns total %d, want %d", width, cols, want)
+		}
+		if maxWidth-minWidth > 1 {
+			t.Errorf("width %d: day columns differ by %d", width, maxWidth-minWidth)
+		}
+	}
+}
+
 func TestCreateEventWithRecurrence(t *testing.T) {
 	t.Setenv("TZ", "Europe/Saratov")
 	f := &fakeAPI{}

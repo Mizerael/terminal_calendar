@@ -38,6 +38,9 @@ type form struct {
 	err        string
 	recurFreq  recurrenceFreq
 	recurCount int
+	// originalRecurrence is preserved until the user explicitly changes Repeat.
+	originalRecurrence []string
+	recurrenceChanged  bool
 }
 
 func newForm() *form {
@@ -102,6 +105,8 @@ func (f *form) reset(defaultDate time.Time) {
 
 	f.recurFreq = recurNone
 	f.recurCount = 0
+	f.originalRecurrence = nil
+	f.recurrenceChanged = false
 }
 
 func (f *form) setEvent(e *domain.Event) {
@@ -126,9 +131,12 @@ func (f *form) setEvent(e *domain.Event) {
 	}
 	if len(e.Recurrence) > 0 {
 		f.recurFreq, f.recurCount = parseRecurrenceRRule(e.Recurrence[0])
+		f.originalRecurrence = append([]string(nil), e.Recurrence...)
 	} else {
 		f.recurFreq, f.recurCount = recurNone, 0
+		f.originalRecurrence = nil
 	}
+	f.recurrenceChanged = false
 }
 
 func formatDate(t time.Time) string { return t.Format("2006-01-02") }
@@ -199,9 +207,7 @@ func (f *form) buildEvent() (*domain.Event, error) {
 		ev.ID = f.editing.ID
 		ev.CalendarID = f.editing.CalendarID
 		ev.CalendarSummary = f.editing.CalendarSummary
-		if len(f.editing.Recurrence) > 0 {
-			ev.Recurrence = []string{}
-		}
+		ev.Recurrence = append([]string(nil), f.editing.Recurrence...)
 	}
 	ev.Summary = title
 	if loc := f.value(fieldLocation); loc != "" {
@@ -223,7 +229,9 @@ func (f *form) buildEvent() (*domain.Event, error) {
 	}
 	ev.TimeZone = tzName
 
-	if rr := buildRecurrenceRRule(f.recurFreq, f.recurCount); rr != "" {
+	if f.editing != nil && !f.recurrenceChanged {
+		ev.Recurrence = append([]string(nil), f.originalRecurrence...)
+	} else if rr := buildRecurrenceRRule(f.recurFreq, f.recurCount); rr != "" {
 		if tzName == "" {
 			return nil, f.fail("repeats require timezone")
 		}
