@@ -236,6 +236,9 @@ func (f *form) buildEvent() (*domain.Event, error) {
 			return nil, f.fail("repeats require timezone")
 		}
 		ev.Recurrence = []string{rr}
+	} else if f.editing != nil && f.recurrenceChanged {
+		// Preserve the explicit removal so the update clears the old rule.
+		ev.Recurrence = []string{}
 	}
 	if allDay {
 		ev.AllDay = true

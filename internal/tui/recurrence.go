@@ -113,7 +113,11 @@ func buildRecurrenceRRule(freq recurrenceFreq, count int) string {
 }
 
 func parseRecurrenceRRule(rrule string) (recurrenceFreq, int) {
-	rrules := strings.Split(strings.TrimPrefix(rrule, "RRULE:"), ";")
+	rrule = strings.TrimSpace(rrule)
+	if len(rrule) >= len("RRULE:") && strings.EqualFold(rrule[:len("RRULE:")], "RRULE:") {
+		rrule = rrule[len("RRULE:"):]
+	}
+	rrules := strings.Split(rrule, ";")
 	freq := recurNone
 	count := 0
 	for _, rule := range rrules {

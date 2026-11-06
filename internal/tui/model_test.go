@@ -68,6 +68,27 @@ func (f *fakeAPI) DeleteEventIn(ctx context.Context, calID, id string) error {
 	return nil
 }
 
+func (f *fakeAPI) GetEventIn(ctx context.Context, calID, eventID string) (*domain.Event, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	src := f.events
+	if f.mapEvents != nil {
+		src = f.mapEvents[calID]
+	}
+	for i := range src {
+		if src[i].ID == eventID {
+			event := src[i]
+			event.CalendarID = calID
+			if event.CalendarSummary == "" {
+				event.CalendarSummary = calID
+			}
+			return &event, nil
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeAPI) CreateSeries(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
 	return nil, nil
 }
@@ -971,7 +992,7 @@ func TestCreateEventWithRecurrence(t *testing.T) {
 
 func TestEditCancelsRecurrence(t *testing.T) {
 	t.Setenv("TZ", "Europe/Saratov")
-	ev := makeEvent("R", "e1", 9, 0)
+	ev := eventAt("R", "e1", "2026-08-31T09:00:00Z", "2026-08-31T10:00:00Z")
 	ev.Recurrence = []string{"RRULE:FREQ=WEEKLY;COUNT=5"}
 	f := &fakeAPI{events: []domain.Event{ev}}
 	m, _ := newTestModel(f)

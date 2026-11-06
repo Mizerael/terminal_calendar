@@ -357,6 +357,19 @@ func (c *Client) UpdateEvent(ctx context.Context, e *domain.Event) (*domain.Even
 	return c.UpdateEventIn(ctx, c.calID, e)
 }
 
+// GetEventIn fetches one event from the given calendar.
+func (c *Client) GetEventIn(ctx context.Context, calID, eventID string) (*domain.Event, error) {
+	apiEvent, err := c.svc.Events.Get(calID, eventID).Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+	event := fromAPIEvent(apiEvent)
+	if event != nil {
+		event.CalendarID = calID
+	}
+	return event, nil
+}
+
 // UpdateEventIn replaces an existing event identified by e.Id in the given
 // calendar.
 func (c *Client) UpdateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
