@@ -38,6 +38,9 @@ type form struct {
 	err        string
 	recurFreq  recurrenceFreq
 	recurCount int
+	// timezoneResolver is normally localIANATimezone; kept on the form so
+	// recurrence validation can be tested without depending on host settings.
+	timezoneResolver func() string
 	// originalRecurrence is preserved until the user explicitly changes Repeat.
 	originalRecurrence []string
 	recurrenceChanged  bool
@@ -54,7 +57,7 @@ func newForm() *form {
 		fieldDescription: "Description",
 		fieldRepeat:      "Repeat",
 	}
-	f := &form{labels: labels}
+	f := &form{labels: labels, timezoneResolver: localIANATimezone}
 	for i := 0; i < int(fieldCount); i++ {
 		ti := textinput.New()
 		ti.Width = 34
@@ -186,20 +189,27 @@ func (f *form) buildEvent() (*domain.Event, error) {
 		return nil, f.fail("start date must be YYYY-MM-DD")
 	}
 
-	endDate := f.value(fieldEndDate)
-	if endDate == "" {
-		endDate = startDate
-	}
-	ed, err := time.ParseInLocation("2006-01-02", endDate, time.Local)
-	if err != nil {
-		return nil, f.fail("end date must be YYYY-MM-DD")
-	}
-
 	startTime := f.value(fieldStartTime)
 	endTime := f.value(fieldEndTime)
 	allDay := startTime == "" && endTime == ""
 	if !allDay && startTime == "" {
 		return nil, f.fail("start time missing (or leave both empty for all-day)")
+	}
+
+	endDate := f.value(fieldEndDate)
+	if endDate == "" {
+		if allDay {
+			endDate = sd.AddDate(0, 0, 1).Format("2006-01-02")
+		} else {
+			endDate = startDate
+		}
+	}
+	ed, err := time.ParseInLocation("2006-01-02", endDate, time.Local)
+	if err != nil {
+		return nil, f.fail("end date must be YYYY-MM-DD")
+	}
+	if allDay && !ed.After(sd) {
+		return nil, f.fail("all-day end date must be after start date")
 	}
 
 	ev := &domain.Event{}
@@ -225,14 +235,14 @@ func (f *form) buildEvent() (*domain.Event, error) {
 		tzName = f.editing.TimeZone // provided by Google, always valid
 	}
 	if tzName == "" {
-		tzName = localIANATimezone() // best effort from the environment
+		tzName = f.timezoneResolver() // best effort from the environment
 	}
 	ev.TimeZone = tzName
 
 	if f.editing != nil && !f.recurrenceChanged {
 		ev.Recurrence = append([]string(nil), f.originalRecurrence...)
 	} else if rr := buildRecurrenceRRule(f.recurFreq, f.recurCount); rr != "" {
-		if tzName == "" {
+		if tzName == "" && !allDay {
 			return nil, f.fail("repeats require timezone")
 		}
 		ev.Recurrence = []string{rr}

@@ -119,7 +119,7 @@ func TestCreateGoesToTargetCalendar(t *testing.T) {
 	m.form.inputs[fieldTitle].SetValue("New meeting")
 	m.form.inputs[fieldStartDate].SetValue("2026-08-31")
 	m.form.inputs[fieldStartTime].SetValue("")
-	m.form.inputs[fieldEndDate].SetValue("2026-08-31")
+	m.form.inputs[fieldEndDate].SetValue("2026-09-01")
 	m.form.inputs[fieldEndTime].SetValue("")
 
 	m = run(t, m, msgKey("enter"))

@@ -340,7 +340,7 @@ func (c *Client) CreateEvent(ctx context.Context, e *domain.Event) (*domain.Even
 
 // CreateEventIn inserts a new event into the given calendar.
 func (c *Client) CreateEventIn(ctx context.Context, calID string, e *domain.Event) (*domain.Event, error) {
-	if len(e.Recurrence) > 0 && e.TimeZone == "" {
+	if len(e.Recurrence) > 0 && !e.AllDay && e.TimeZone == "" {
 		return nil, errors.New("recurring events require a timezone")
 	}
 	api := toAPIEvent(e)

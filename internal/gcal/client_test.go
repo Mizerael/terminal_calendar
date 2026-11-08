@@ -2,6 +2,7 @@ package gcal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -275,6 +276,111 @@ func TestListEventsRangeInTagsCalendar(t *testing.T) {
 	}
 	if evs[0].CalendarID != "personal" || evs[0].CalendarSummary != "personal" {
 		t.Errorf("event not tagged with calendar: %+v", evs[0])
+	}
+}
+
+func TestCreateEventInPostsRecurringTimedEventAndMapsResponse(t *testing.T) {
+	var gotMethod, gotPath string
+	var posted struct {
+		Summary    string   `json:"summary"`
+		Recurrence []string `json:"recurrence"`
+		Start      struct {
+			DateTime string `json:"dateTime"`
+			TimeZone string `json:"timeZone"`
+		} `json:"start"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+			t.Errorf("decode insert body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"created-1","summary":"Daily sync","start":{"dateTime":"2026-09-01T10:30:00","timeZone":"Europe/Saratov"},"end":{"dateTime":"2026-09-01T11:00:00","timeZone":"Europe/Saratov"},"recurrence":["RRULE:FREQ=DAILY;COUNT=5"]}`)
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{svc: svc, calID: "configured-calendar"}
+	zone, err := time.LoadLocation("Europe/Saratov")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := &domain.Event{
+		Summary:    "Daily sync",
+		Start:      time.Date(2026, 9, 1, 10, 30, 0, 0, zone),
+		End:        time.Date(2026, 9, 1, 11, 0, 0, 0, zone),
+		TimeZone:   "Europe/Saratov",
+		Recurrence: []string{"RRULE:FREQ=DAILY;COUNT=5"},
+	}
+	created, err := c.CreateEventIn(context.Background(), "selected-calendar", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodPost || !strings.HasSuffix(gotPath, "/calendars/selected-calendar/events") {
+		t.Errorf("request = %s %s, want POST to selected calendar events", gotMethod, gotPath)
+	}
+	if posted.Summary != input.Summary || len(posted.Recurrence) != 1 || posted.Recurrence[0] != input.Recurrence[0] {
+		t.Errorf("posted summary/recurrence = %q / %v", posted.Summary, posted.Recurrence)
+	}
+	if posted.Start.DateTime != "2026-09-01T10:30:00" || posted.Start.TimeZone != "Europe/Saratov" {
+		t.Errorf("posted start = %+v", posted.Start)
+	}
+	if created.ID != "created-1" || created.Summary != "Daily sync" || len(created.Recurrence) != 1 || created.Recurrence[0] != input.Recurrence[0] {
+		t.Errorf("mapped response = %+v", created)
+	}
+	if created.TimeZone != "Europe/Saratov" || !created.Start.Equal(input.Start) || !created.End.Equal(input.End) {
+		t.Errorf("mapped response lost timed zone fidelity: %+v", created)
+	}
+}
+
+func TestCreateAllDayRecurringEventNeedsNoExplicitTimezone(t *testing.T) {
+	var gotPath string
+	var posted struct {
+		Start struct {
+			Date string `json:"date"`
+		} `json:"start"`
+		End struct {
+			Date string `json:"date"`
+		} `json:"end"`
+		Recurrence []string `json:"recurrence"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+			t.Errorf("decode insert body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"holiday-1","summary":"Holiday","start":{"date":"2026-12-24"},"end":{"date":"2026-12-25"},"recurrence":["RRULE:FREQ=YEARLY"]}`)
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{svc: svc, calID: "primary"}
+	input := &domain.Event{
+		Summary:    "Holiday",
+		Start:      time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC),
+		End:        time.Date(2026, 12, 25, 0, 0, 0, 0, time.UTC),
+		AllDay:     true,
+		Recurrence: []string{"RRULE:FREQ=YEARLY"},
+	}
+	created, err := c.CreateEventIn(context.Background(), "personal", input)
+	if err != nil {
+		t.Fatalf("CreateEventIn rejected all-day recurrence without a timeZone: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/calendars/personal/events") {
+		t.Errorf("request path = %q, want selected calendar", gotPath)
+	}
+	if posted.Start.Date != "2026-12-24" || posted.End.Date != "2026-12-25" || len(posted.Recurrence) != 1 || posted.Recurrence[0] != input.Recurrence[0] {
+		t.Errorf("posted all-day recurrence = %+v", posted)
+	}
+	if created == nil || created.ID != "holiday-1" || !created.AllDay || len(created.Recurrence) != 1 {
+		t.Errorf("mapped all-day response = %+v", created)
 	}
 }
 
