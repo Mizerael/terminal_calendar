@@ -601,8 +601,8 @@ func TestGridRender(t *testing.T) {
 	if !strings.Contains(grid, "Workshop") {
 		t.Errorf("grid should contain Workshop")
 	}
-	if !strings.Contains(grid, "all-day") {
-		t.Errorf("grid should contain the all-day banner")
+	if !strings.Contains(grid, "all-…") {
+		t.Errorf("grid should contain the width-constrained all-day banner")
 	}
 	if !strings.Contains(grid, "2x") {
 		t.Errorf("grid should mark the 09:00 clash with 2x")
@@ -773,16 +773,16 @@ func TestFocusedEventMarker(t *testing.T) {
 func TestColWidth(t *testing.T) {
 	m := &Model{}
 	m.width = 100
-	if got := m.colW(); got != 13 {
-		t.Errorf("colW(100) = %d, want 13", got)
+	if got := m.colW(); got != 14 {
+		t.Errorf("colW(100) = %d, want 14", got)
 	}
 	m.width = 40
-	if got := m.colW(); got != 8 {
-		t.Errorf("colW(40) = %d, want 8 (clamped to min)", got)
+	if got := m.colW(); got != 5 {
+		t.Errorf("colW(40) = %d, want 5", got)
 	}
 	m.width = 200
-	if got := m.colW(); got != 27 {
-		t.Errorf("colW(200) = %d, want 27 (stretches with width)", got)
+	if got := m.colW(); got != 28 {
+		t.Errorf("colW(200) = %d, want 28 (stretches with width)", got)
 	}
 }
 
@@ -794,8 +794,8 @@ func TestWindowResizeFillsTerminal(t *testing.T) {
 	if got := m.effectiveRows(); got > 24 || got < 1 {
 		t.Errorf("effectiveRows on small terminal = %d, want within [1,24]", got)
 	}
-	if got := m.colW(); got < colWMin {
-		t.Errorf("colW on small terminal = %d, want >= %d", got, colWMin)
+	if got := m.colW(); got != 5 {
+		t.Errorf("colW on small terminal = %d, want 5", got)
 	}
 
 	// large terminal: grid should stretch (more rows, wider columns)
@@ -810,8 +810,8 @@ func TestWindowResizeFillsTerminal(t *testing.T) {
 		t.Errorf("effectiveRows on tall terminal = %d, want %d", got, want)
 	}
 	// columns stretch with width
-	if got := m.colW(); got != 27 {
-		t.Errorf("colW on wide terminal = %d, want 27", got)
+	if got := m.colW(); got != 28 {
+		t.Errorf("colW on wide terminal = %d, want 28", got)
 	}
 }
 
@@ -915,7 +915,7 @@ func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
 		makeEvent("Afternoon review", "b", 14, 0),
 		alldayOn("Holiday", "c", "2026-09-01"),
 	}}
-	for _, sz := range [][2]int{{80, 20}, {100, 24}, {160, 40}, {220, 50}} {
+	for _, sz := range [][2]int{{40, 20}, {60, 20}, {80, 20}, {100, 24}, {160, 40}, {220, 50}} {
 		m, _ := newTestModel(f)
 		m.weekStart = mon
 		m = upd(t, m, tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
@@ -926,14 +926,14 @@ func TestResizeRenderDoesNotPanicOrOverflow(t *testing.T) {
 		}
 		for _, line := range strings.Split(v, "\n") {
 			if w := lipgloss.Width(line); w > sz[0] {
-				t.Errorf("size %dx%d: line width %d exceeds terminal width", sz[0], sz[1], w)
+				t.Errorf("size %dx%d: line width %d exceeds terminal width: %q", sz[0], sz[1], w, line)
 			}
 		}
 	}
 }
 
 func TestDayColumnWidthsFillAvailableGridWidth(t *testing.T) {
-	for _, width := range []int{40, 80, 101, 160} {
+	for _, width := range []int{40, 60, 80, 101, 160} {
 		m := &Model{width: width}
 		cols := 0
 		minWidth, maxWidth := int(^uint(0)>>1), 0
@@ -955,6 +955,84 @@ func TestDayColumnWidthsFillAvailableGridWidth(t *testing.T) {
 			t.Errorf("width %d: day columns differ by %d", width, maxWidth-minWidth)
 		}
 	}
+}
+
+func TestGridCellStylesKeepBalancedColumnWidths(t *testing.T) {
+	for _, width := range []int{40, 60, 80, 101} {
+		m := &Model{width: width, dayIndex: 0, eventIndex: -1}
+		for d := 0; d < 7; d++ {
+			colW := m.dayColW(d)
+			want := colW
+			got := lipgloss.Width(m.renderDayHeaderCell(d, colW))
+			if got != want {
+				t.Errorf("width %d day %d header width %d, want %d", width, d, got, want)
+			}
+			got = lipgloss.Width(m.renderEmptyCell(false, false, false, colW))
+			if got != want {
+				t.Errorf("width %d day %d empty cell width %d, want %d", width, d, got, want)
+			}
+			got = lipgloss.Width(m.renderHourCell(d, 9, map[int][]*span{9: {{start: 9, end: 10, ev: &domain.Event{Summary: "Event"}}}}, time.Now(), colW))
+			if got != want {
+				t.Errorf("width %d day %d event cell width %d, want %d", width, d, got, want)
+			}
+		}
+	}
+}
+
+func TestAllDayAndTimedRowsShareGutterBoundaries(t *testing.T) {
+	m := &Model{
+		width:     80,
+		height:    20,
+		weekStart: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC),
+	}
+	m.weekEvents[1] = []domain.Event{alldayOn("Holiday", "holiday", "2026-09-01")}
+	lines := strings.Split(m.renderGrid(), "\n")
+	var allDayLine, timedLine string
+	for _, line := range lines {
+		if strings.Contains(line, "Holiday") {
+			allDayLine = line
+		}
+		if strings.HasPrefix(line, "06:00") {
+			timedLine = line
+		}
+	}
+	if allDayLine == "" || timedLine == "" {
+		t.Fatalf("missing all-day or timed row in grid:\n%s", strings.Join(lines, "\n"))
+	}
+	if got := lipgloss.Width(renderGridGutter("all-day")); got != gutterW {
+		t.Errorf("all-day gutter width %d, want %d", got, gutterW)
+	}
+	allDayBoundary := strings.Index(allDayLine, "│")
+	timedBoundary := strings.Index(timedLine, "│")
+	if got, want := lipgloss.Width(allDayLine[:allDayBoundary]), lipgloss.Width(timedLine[:timedBoundary]); got != want {
+		t.Errorf("first day boundary differs: all-day column %d, timed column %d", got, want)
+	}
+	if got := lipgloss.Width(allDayLine[:allDayBoundary]); got != gutterW {
+		t.Errorf("first day boundary at column %d, want fixed gutter width %d", got, gutterW)
+	}
+	allDayBoundaries, timedBoundaries := boundaryColumns(allDayLine), boundaryColumns(timedLine)
+	if len(allDayBoundaries) != len(timedBoundaries) {
+		t.Fatalf("boundary counts differ: all-day %v, timed %v", allDayBoundaries, timedBoundaries)
+	}
+	for i := range allDayBoundaries {
+		if allDayBoundaries[i] != timedBoundaries[i] {
+			t.Errorf("boundary %d differs: all-day column %d, timed column %d", i, allDayBoundaries[i], timedBoundaries[i])
+		}
+	}
+}
+
+func boundaryColumns(line string) []int {
+	var columns []int
+	for offset := 0; offset < len(line); {
+		rel := strings.Index(line[offset:], "│")
+		if rel < 0 {
+			break
+		}
+		index := offset + rel
+		columns = append(columns, lipgloss.Width(line[:index]))
+		offset = index + len("│")
+	}
+	return columns
 }
 
 func TestCreateEventWithRecurrence(t *testing.T) {

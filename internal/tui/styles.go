@@ -98,67 +98,48 @@ var (
 
 	gridHeaderDay = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("245")).
-			Width(10).
-			Inline(true)
+			Foreground(lipgloss.Color("245"))
 
 	gridHeaderDayWeekend = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("239")).
-				Width(10).
-				Inline(true)
+				Foreground(lipgloss.Color("239"))
 
 	gridHeaderDaySelected = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("205")).
-				Background(lipgloss.Color("236")).
-				Width(10).
-				Inline(true)
+				Background(lipgloss.Color("236"))
 
 	gridHeaderDayToday = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("214")).
-				Width(10).
-				Inline(true)
+				Foreground(lipgloss.Color("214"))
 
 	gridCell = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, true, false, true).
-			BorderForeground(lipgloss.Color("238")).
-			Width(10).
-			Inline(true)
+			BorderForeground(lipgloss.Color("238"))
 
 	gridCellWeekend = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, true, false, true).
 			BorderForeground(lipgloss.Color("235")).
-			Foreground(lipgloss.Color("237")).
-			Width(10).
-			Inline(true)
+			Foreground(lipgloss.Color("237"))
 
 	gridCellFocused = lipgloss.NewStyle().
 			Background(lipgloss.Color("24")).
 			Border(lipgloss.NormalBorder(), false, true, false, true).
-			BorderForeground(lipgloss.Color("24")).
-			Width(10).
-			Inline(true)
+			BorderForeground(lipgloss.Color("24"))
 
 	gridEventTop = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("214")).
-			Background(lipgloss.Color("58")).
-			Width(9).
-			PaddingLeft(1)
+			Background(lipgloss.Color("58"))
 
 	gridEventCont = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("235")).
-			Background(lipgloss.Color("58")).
-			Width(10)
+			Background(lipgloss.Color("58"))
 
 	gridEventCursor = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("15")).
-			Background(lipgloss.Color("202")).
-			Width(9).
-			PaddingLeft(1)
+			Background(lipgloss.Color("202"))
 
 	gridNow = lipgloss.NewStyle().
 		Bold(true).
@@ -166,13 +147,9 @@ var (
 
 	gridAllDay = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("249")).
-			Background(lipgloss.Color("60")).
-			Width(10).
-			Inline(true)
+			Background(lipgloss.Color("60"))
 
 	gridAllDayToday = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("254")).
-			Background(lipgloss.Color("61")).
-			Width(10).
-			Inline(true)
+			Background(lipgloss.Color("61"))
 )

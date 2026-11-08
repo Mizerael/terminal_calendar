@@ -34,6 +34,9 @@ func (m *Model) renderList() string {
 func (m *Model) renderHeader() string {
 	weekEnd := m.weekStart.AddDate(0, 0, 6)
 	title := fmt.Sprintf("Week: %s — %s", m.weekStart.Format("02 Jan"), weekEnd.Format("02 Jan 2006"))
+	if m.width < 70 {
+		return titleStyle.Render(truncate(fmt.Sprintf("Week: %s — %s", m.weekStart.Format("02 Jan"), weekEnd.Format("02 Jan")), m.width))
+	}
 	right := "◄ [ week ] ►"
 	if !m.lastSync.IsZero() {
 		right = "synced " + m.lastSync.Format("15:04:05") + "  ◄ [ week ] ►"

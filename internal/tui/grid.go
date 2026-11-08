@@ -18,33 +18,23 @@ const (
 	// gutterW is the width reserved for the leading hour-label column.
 	gutterW = 6
 
-	// rowBorderW is the width added by the vertical borders of the day cells
-	// across a single hour row (shared borders, not per column).
+	// rowBorderW reserves space for the vertical cell borders.
 	rowBorderW = 2
-
-	// colWMin is the smallest width each day column may have on a narrow
-	// terminal. There is no upper bound: columns stretch with the terminal so
-	// event titles get more room on wide screens.
-	colWMin = 8
 )
 
 // colW returns the width of each day column based on the terminal width. It
 // leaves room for the hour gutter and the cells' shared borders so the grid
 // never overflows the terminal.
 func (m *Model) colW() int {
-	cw := (m.width - gutterW - rowBorderW) / 7
-	if cw < colWMin {
-		cw = colWMin
-	}
-	return cw
+	return m.dayColW(0)
 }
 
 // dayColW distributes the space available after the hour gutter across the
 // seven day columns. A remainder is assigned from Monday onward.
 func (m *Model) dayColW(day int) int {
 	usable := m.width - gutterW - rowBorderW
-	if usable <= 0 {
-		usable = 7 * colWMin
+	if usable < 0 {
+		usable = 0
 	}
 	base, remainder := usable/7, usable%7
 	if day < remainder {
@@ -66,7 +56,7 @@ func (m *Model) renderGrid() string {
 	rows := m.effectiveRows()
 	// Header row: blank gutter + one cell per day.
 	var header []string
-	header = append(header, gridGutter.Render("     "))
+	header = append(header, renderGridGutter("     "))
 	for d := 0; d < 7; d++ {
 		header = append(header, m.renderDayHeaderCell(d, m.dayColW(d)))
 	}
@@ -88,7 +78,7 @@ func (m *Model) renderGrid() string {
 	for r := 0; r < rows; r++ {
 		hour := m.scrollHour + r
 		var line []string
-		line = append(line, gridGutter.Render(fmt.Sprintf("%02d:00", hour)))
+		line = append(line, renderGridGutter(fmt.Sprintf("%02d:00", hour)))
 		for d := 0; d < 7; d++ {
 			line = append(line, cols[d][r])
 		}
@@ -159,7 +149,7 @@ func (m *Model) renderDayHeaderCell(d, colW int) string {
 	default:
 		s = gridHeaderDay
 	}
-	return s.Copy().Width(colW).Render(label)
+	return s.Copy().Width(colW).MaxWidth(colW).Render(truncate(label, colW))
 }
 
 // renderAllDayRow builds a single row of all-day events, one cell per day.
@@ -168,6 +158,7 @@ func (m *Model) renderAllDayRow() string {
 	any := false
 	for d := 0; d < 7; d++ {
 		colW := m.dayColW(d)
+		cellW := colW
 		var names []string
 		for i := range m.weekEvents[d] {
 			e := &m.weekEvents[d][i]
@@ -176,7 +167,7 @@ func (m *Model) renderAllDayRow() string {
 			}
 		}
 		if len(names) == 0 {
-			cells = append(cells, gridCell.Copy().Width(colW).Render(""))
+			cells = append(cells, gridCell.Copy().Width(cellW).MaxWidth(cellW).Render(""))
 			continue
 		}
 		any = true
@@ -184,13 +175,17 @@ func (m *Model) renderAllDayRow() string {
 		if d == m.dayIndex {
 			s = gridCellFocused
 		}
-		cells = append(cells, s.Copy().Width(colW).Render(strings.Join(names, ",")))
+		cells = append(cells, s.Copy().Width(cellW).MaxWidth(cellW).Render(truncate(strings.Join(names, ","), cellW)))
 	}
 	if !any {
 		return ""
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		append([]string{gridGutter.Render("all-day")}, cells...)...)
+		append([]string{renderGridGutter("all-day")}, cells...)...)
+}
+
+func renderGridGutter(label string) string {
+	return gridGutter.Render(truncate(label, gutterW-1))
 }
 
 // buildDayColumn returns one rendered string per visible hour row for a single
@@ -254,18 +249,18 @@ func (m *Model) renderHourCell(d, hour int, covering map[int][]*span, now time.T
 		// The focused event: highlight the whole span distinctly so the
 		// selection is obvious regardless of which calendar it belongs to.
 		if cont {
-			return gridEventCont.Copy().Background(lipgloss.Color("237")).Width(colW).Render("")
+			return gridEventCont.Copy().Width(colW).MaxWidth(colW).Background(lipgloss.Color("237")).Render("")
 		}
 		full := focusedEventLabel(top.ev)
 		if len(active) > 1 {
 			full += " " + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(itoa(len(active))+"x")
 		}
 		full = truncate(full, colW)
-		return gridEventCursor.Copy().Width(colW).Render(full)
+		return gridEventCursor.Copy().Width(colW).MaxWidth(colW).Render(full)
 	}
 
 	if cont {
-		return gridEventCont.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render("")
+		return gridEventCont.Copy().Width(colW).MaxWidth(colW).Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Render("")
 	}
 
 	text := top.ev.Summary
@@ -277,7 +272,7 @@ func (m *Model) renderHourCell(d, hour int, covering map[int][]*span, now time.T
 		full += " " + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render(itoa(len(active))+"x")
 	}
 	full = truncate(full, colW)
-	return gridEventTop.Copy().Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Width(colW).Render(full)
+	return gridEventTop.Copy().Width(colW).MaxWidth(colW).Background(lipgloss.Color(calendarColor(top.ev.CalendarID))).Render(full)
 }
 
 // focusedEventLabel prefixes the focused event's title with a pointer so the
@@ -298,17 +293,18 @@ func (m *Model) emptyCellCursor(d, hour int) bool {
 }
 
 func (m *Model) renderEmptyCell(isCursor, isWeekend, isNow bool, colW int) string {
+	cellW := colW
 	var content string
 	if isNow {
 		content = "•"
 	}
 	switch {
 	case isCursor:
-		return gridCellFocused.Copy().Width(colW).Render(content)
+		return gridCellFocused.Copy().Width(cellW).MaxWidth(cellW).Render(content)
 	case isWeekend:
-		return gridCellWeekend.Copy().Width(colW).Render(content)
+		return gridCellWeekend.Copy().Width(cellW).MaxWidth(cellW).Render(content)
 	default:
-		return gridCell.Copy().Width(colW).Render(content)
+		return gridCell.Copy().Width(cellW).MaxWidth(cellW).Render(content)
 	}
 }
 
