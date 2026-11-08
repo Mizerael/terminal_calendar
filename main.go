@@ -52,7 +52,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	model.SetStatePath(statePathDefault())
+	model.SetStateDirectory(stateDirectoryDefault(*token))
 	model.SetInitialTarget(*calendarID)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
@@ -62,16 +62,19 @@ func main() {
 	}
 }
 
-// statePathDefault returns the location of the persisted calendar selection,
-// based on the token cache directory when available.
-func statePathDefault() string {
-	tok := os.Getenv(gcal.EnvToken)
+// stateDirectoryDefault returns the directory for persisted calendar
+// selections, based on the token cache directory when available.
+func stateDirectoryDefault(token string) string {
+	tok := token
+	if tok == "" {
+		tok = os.Getenv(gcal.EnvToken)
+	}
 	if tok == "" {
 		tok = "token.json"
 	}
 	dir := filepath.Dir(tok)
-	if dir == "." || dir == "" {
-		return "calendar_state.json"
+	if dir == "" {
+		dir = "."
 	}
-	return filepath.Join(dir, "calendar_state.json")
+	return dir
 }

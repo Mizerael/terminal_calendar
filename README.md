@@ -97,6 +97,13 @@ is passed to Google as a login hint and remembered for later runs (sidecar
 `token.json.account`). Press `esc` to skip and use the browser's account
 chooser instead.
 
+Calendar selections are stored in `calendar_state.json` beside the token file.
+Selections saved by this version are keyed by a hash of the authenticated
+account's primary calendar ID, so switching accounts loads that account's own
+picker settings. Older unscoped `enabled` and `target` values are kept in the
+file but are not assigned to an account automatically; each account starts
+with the default selection until it is saved under its own key.
+
 ## Layout
 
 - `main.go` — entry point and flags

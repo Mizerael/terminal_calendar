@@ -81,8 +81,13 @@ type Model struct {
 
 	// calendars holds the user's calendars; sel selects which are loaded and
 	// shown merged and which is the create-target (see usecase.Selection).
-	calendars []domain.Calendar
-	statePath string
+	calendars        []domain.Calendar
+	statePath        string
+	stateDir         string
+	stateAccountKey  string
+	stateIdentity    string
+	stateIdentitySet bool
+	initialTarget    string
 	// picker is the calendar visibility/target overlay.
 	picker      bool
 	pickerIndex int
@@ -104,7 +109,6 @@ func New(svc *usecase.CalendarService) (*Model, error) {
 		scrollHour: defaultScrollHour,
 		sel:        usecase.Selection{Enabled: map[string]bool{}},
 	}
-	m.loadState()
 	m.reload()
 	return m, nil
 }
@@ -196,6 +200,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case msgCalendarsLoaded:
+		m.loadAccountState()
 		m.reconcileSelection()
 		m.saveState()
 		return m, m.loadWeekEvents
